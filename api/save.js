@@ -49,16 +49,26 @@ export default async function handler(request) {
       return new Response(JSON.stringify({ error: 'Missing data field' }), { status: 400, headers: corsHeaders() });
     }
 
-    // Generate unique short ID (retry on collision)
+    // Payload size guard (~500KB max)
+    const payload = JSON.stringify(body.data);
+    if (payload.length > 512000) {
+      return new Response(JSON.stringify({ error: 'Payload too large' }), { status: 413, headers: corsHeaders() });
+    }
+
+    // Generate unique short ID (retry on collision, 8 chars for more entropy)
     let id;
-    for (let i = 0; i < 5; i++) {
-      id = generateId(6);
+    let unique = false;
+    for (let i = 0; i < 8; i++) {
+      id = generateId(8);
       const exists = await redisExists(`menu:${id}`);
-      if (!exists) break;
+      if (!exists) { unique = true; break; }
+    }
+    if (!unique) {
+      return new Response(JSON.stringify({ error: 'ID generation failed, try again' }), { status: 503, headers: corsHeaders() });
     }
 
     // Store with no expiry (restaurant QR should be permanent)
-    await redisSet(`menu:${id}`, JSON.stringify(body.data));
+    await redisSet(`menu:${id}`, payload);
 
     return new Response(JSON.stringify({ id }), { status: 200, headers: corsHeaders() });
   } catch (e) {

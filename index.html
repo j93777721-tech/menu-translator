@@ -978,16 +978,29 @@ const DEFAULT_SETTINGS = {
   exchangeRate: 39
 };
 
+let _settingsCache = null;
+let _settingsCacheTime = 0;
 function getSettings() {
-  const saved = localStorage.getItem('menuToolSettings');
-  if (saved) {
-    const s = JSON.parse(saved);
-    if (!s.visionModel) s.visionModel = s.model;
-    if (!s.currency) s.currency = DEFAULT_SETTINGS.currency;
-    if (!s.exchangeRate) s.exchangeRate = DEFAULT_SETTINGS.exchangeRate;
-    return s;
+  // Cache for 2 seconds to avoid repeated localStorage reads during render cycles
+  const now = Date.now();
+  if (_settingsCache && now - _settingsCacheTime < 2000) return _settingsCache;
+  try {
+    const saved = localStorage.getItem('menuToolSettings');
+    if (saved) {
+      const s = JSON.parse(saved);
+      if (!s.visionModel) s.visionModel = s.model;
+      if (!s.currency) s.currency = DEFAULT_SETTINGS.currency;
+      if (!s.exchangeRate) s.exchangeRate = DEFAULT_SETTINGS.exchangeRate;
+      _settingsCache = s;
+      _settingsCacheTime = now;
+      return s;
+    }
+  } catch(e) {
+    console.warn('Settings parse error, using defaults:', e);
   }
-  return { ...DEFAULT_SETTINGS };
+  _settingsCache = { ...DEFAULT_SETTINGS };
+  _settingsCacheTime = now;
+  return _settingsCache;
 }
 
 // === 币种选择（用户友好） ===
@@ -1047,6 +1060,7 @@ function saveCurrency() {
   s.currency = pickerCurrency;
   s.exchangeRate = parseFloat(document.getElementById('currencyRate')?.value) || 39;
   localStorage.setItem('menuToolSettings', JSON.stringify(s));
+  _settingsCache = null; // invalidate cache
   safeText('currencyBadge', s.currency + '→¥');
   closeCurrencyPicker();
   showToast('币种已更新');
@@ -1270,6 +1284,7 @@ function saveSettings() {
   s.visionModel = document.getElementById('apiVisionModel')?.value || s.visionModel;
   s.proxy = (document.getElementById('apiProxy')?.value || '').trim();
   localStorage.setItem('menuToolSettings', JSON.stringify(s));
+  _settingsCache = null; // invalidate cache
   closeSettings();
   showToast('设置已保存');
 }
@@ -1878,7 +1893,9 @@ spicy: 0不辣 1微辣 2中辣 3很辣。popular: 招牌或热门菜标true。de
 
 function buildRecPrompt(menu) {
   const s = getSettings();
-  return `基于以下餐厅菜单，为中国游客推荐点餐方案。餐厅位于巴基斯坦拉合尔。
+  const loc = getSavedLocation();
+  const locationDesc = loc ? `${loc.country || ''}${loc.city || ''}` : '海外';
+  return `基于以下餐厅菜单，为中国游客推荐点餐方案。餐厅位于${locationDesc}。
 当地货币：${s.currency}，汇率：1 CNY ≈ ${s.exchangeRate} ${s.currency}
 
 菜单数据：
@@ -2731,12 +2748,23 @@ function generateOrderFromRec(rec) {
   const slipSpecialReq = orderLang === 'local' && !isLocalLangEnglish ? '⚠️ Special Request / خاص درخواست:' : '⚠️ Special Request:';
 
   const el = document.getElementById('orderContent');
+  // Normalize items to {name, qty, price} regardless of format
+  const normalizedItems = (rec.items || []).map(item => {
+    if (typeof item === 'object' && item.n) {
+      return { name: item.n, qty: item.qty || 1, price: item.price || 0 };
+    }
+    // Legacy string format: "菜品名 x2" or "菜品名 ×2"
+    const match = String(item).match(/(.+?)\s*[xX×]\s*(\d+)/);
+    return { name: match ? match[1].trim() : String(item), qty: match ? parseInt(match[2]) : 1, price: 0 };
+  });
+  const totalDisplay = rec.total ? `${getSettings().currency} ${rec.total}` : (rec.totalPrice || '');
+
   el.innerHTML = `
     <div class="section-title" style="margin-bottom:8px">📖 推荐方案：${rec.name}</div>
     <div style="background:#f5f5f5;border-radius:8px;padding:12px;margin-bottom:20px;font-size:13px;">
-      ${rec.items.map(item => `<div style="padding:3px 0;">${item}</div>`).join('')}
+      ${normalizedItems.map(item => `<div style="padding:3px 0;">${item.name} ×${item.qty}${item.price ? ' ' + getSettings().currency + item.price : ''}</div>`).join('')}
       <div style="border-top:1px dashed #ccc;margin-top:8px;padding-top:8px;font-weight:600;">
-        预估总价：${rec.totalPrice || ''}
+        预估总价：${totalDisplay}
       </div>
       ${hasRemarks ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #ccc;color:#666;">📝 备注：${remarksCNStr}</div>` : ''}
     </div>
@@ -2757,21 +2785,18 @@ function generateOrderFromRec(rec) {
           <tr><th>Item</th><th style="text-align:right">Qty</th></tr>
         </thead>
         <tbody>
-          ${rec.items.map(item => {
-            const match = item.match(/(.+?)\s*[xX×]\s*(\d+)/);
-            const name = match ? match[1].trim() : item;
-            const qty = match ? match[2] : '1';
-            let engName = name;
+          ${normalizedItems.map(item => {
+            let engName = item.name;
             if (menuData) {
               menuData.categories.forEach(cat => {
                 cat.items.forEach(mi => {
-                  if (mi.nameCN.includes(name) || name.includes(mi.nameCN)) {
-                    engName = (orderLang === 'local' && !isLocalLangEnglish) ? mi.name : mi.name;
+                  if (mi.nameCN === item.name || mi.nameCN.includes(item.name) || item.name.includes(mi.nameCN)) {
+                    engName = mi.name;
                   }
                 });
               });
             }
-            return `<tr><td>${engName}</td><td style="text-align:right">${qty}</td></tr>`;
+            return `<tr><td>${engName}</td><td style="text-align:right">${item.qty}</td></tr>`;
           }).join('')}
         </tbody>
       </table>
@@ -2785,7 +2810,7 @@ function generateOrderFromRec(rec) {
       <hr class="order-divider">
       <div class="order-total">
         <span>Estimated Total</span>
-        <span>${rec.totalPrice || ''}</span>
+        <span>${totalDisplay}</span>
       </div>
     </div>
 
@@ -3232,8 +3257,11 @@ const DEMO_RECOMMENDATIONS = {
 // === Share & QR Code ===
 let shareUrl = '';
 
+let _shareInProgress = false;
 async function shareMenu() {
+  if (_shareInProgress) return;
   if (!menuData) { showToast('暂无菜单数据'); return; }
+  _shareInProgress = true;
 
   // === Build full share data (link uses this — complete with recommendations) ===
   const fullData = {
@@ -3295,6 +3323,7 @@ async function shareMenu() {
     if (res.ok) {
       const { id } = await res.json();
       shortUrl = `${location.origin}/s/${id}`;
+      shareUrl = shortUrl; // 复制链接也用短链
     }
   } catch (e) {
     console.warn('Save to KV failed, falling back to compressed URL:', e);
@@ -3324,6 +3353,7 @@ async function shareMenu() {
       qrContainer.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px;">菜品过多，请用链接分享</div>';
     }
   }
+  _shareInProgress = false;
 }
 
 function closeShareModal() {
