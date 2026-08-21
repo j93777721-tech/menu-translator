@@ -1853,6 +1853,7 @@ async function startRecognition() {
       _customRecResults = null; // 清空上一家餐厅的自由推荐结果
       _customRecQuery = '';
       _customRecTags = []; // 已选快捷条件也要清，避免串到新餐厅
+      _menuVersion++; // 让还在跑的旧 enrichMenuAsync 回来时能识别菜单已换，静默丢弃结果
       renderMenu();
       saveSession();
       hideLoading();
@@ -2100,6 +2101,9 @@ function hideRetryOption() {
 async function enrichMenuAsync(menu) {
   const banner = document.getElementById('enrichBanner');
   const bannerText = document.getElementById('enrichText');
+  // 记录发起 enrich 时的菜单版本号；如果中途用户又识别了一份新菜单（版本号递增），
+  // 老的 enrich 结果必须丢弃，防止把新菜单的字段被旧数据覆盖
+  const startVersion = _menuVersion;
 
   // 显示加载状态
   if (banner) banner.classList.add('active');
@@ -2108,6 +2112,7 @@ async function enrichMenuAsync(menu) {
   try {
     // 2a: 补充辣度+描述+热门标记
     const enrichResult = await callTextAPI(buildEnrichPrompt(menu));
+    if (startVersion !== _menuVersion || menuData !== menu) return; // 已换菜单，静默丢弃
     const enrichData = parseEnrichJSON(enrichResult);
     applyEnrichData(menu, enrichData);
     renderMenu(); // 刷新 UI 显示新信息
@@ -2118,6 +2123,7 @@ async function enrichMenuAsync(menu) {
 
     // 2b: 生成推荐搭配
     const recResult = await callTextAPI(buildRecPrompt(menu));
+    if (startVersion !== _menuVersion || menuData !== menu) return; // 同上，二段也要复核
     recommendations = parseRecJSON(recResult);
     renderRecommendations();
     saveSession();
@@ -2913,6 +2919,7 @@ let _customRecResults = null; // Array of recommendation objects from last custo
 let _customRecLoading = false;
 let _customRecQuery = ''; // 用户手动输入的自由文本（标签另存，避免回填时重复）
 let _customRecTags = []; // 已选中的快捷条件，可多选
+let _menuVersion = 0; // 每次识别/加载新菜单时递增，用来让老的异步 enrich 在回来时识别自己已过期
 
 const CUSTOM_REC_SUGGESTIONS = ['想吃辣的', '不要太贵', '适合拍照打卡', '有什么甜品', '清淡健康的'];
 
@@ -3595,9 +3602,20 @@ function generateOrderFromRec(rec) {
   switchPage('order');
 }
 
+let _submittingOrder = false;
 function submitOrder() {
-  // Gather order details before clearing
+  // Guard against double click / re-entry (would otherwise create empty duplicate order)
+  if (_submittingOrder) return;
   const items = getSelectedItemsList();
+  if (!items.length) {
+    showToast('订单为空，请先选菜');
+    return;
+  }
+  _submittingOrder = true;
+  // Release the lock shortly after — long enough to swallow accidental double taps,
+  // but short enough that a real network hiccup won't leave the button dead.
+  setTimeout(() => { _submittingOrder = false; }, 1500);
+
   const totalPrice = items.reduce((sum, item) => sum + (item.priceNum || 0) * item.qty, 0);
   const s = getSettings();
   const totalStr = `${s.currency} ${totalPrice} ≈¥${toRmb(totalPrice)}`;
@@ -3624,7 +3642,7 @@ function submitOrder() {
   updateOrderBadge();
   // Refresh history list so the new order appears immediately
   renderHistory();
-  showToast('订单已保存');
+  showToast(isGuestMode ? '订单已生成' : '订单已保存');
 }
 
 function fullscreenOrder() {
@@ -3764,6 +3782,8 @@ function getOrderHistory() {
 
 function saveToHistory() {
   if (!menuData) return;
+  // Guest（被分享方）不写入本地历史，避免污染访客自己的餐厅历史
+  if (isGuestMode) return;
   const history = getHistory();
   const entry = {
     id: Date.now(),
@@ -3784,6 +3804,8 @@ function saveToHistory() {
 }
 
 function saveOrderToHistory(orderItems, totalPrice, remarks) {
+  // Guest 模式下不落库到本地，避免访客的订单历史被别人分享的菜单污染
+  if (isGuestMode) return;
   const shopKey = menuData.shopNameCN || menuData.shopName || '未知餐厅';
   const allOrders = getOrderHistory();
   if (!allOrders[shopKey]) allOrders[shopKey] = [];
@@ -3813,6 +3835,11 @@ function loadFromHistory(id) {
   menuData = entry.data;
   recommendations = entry.recommendations;
   selectedItems = {};
+  // 切餐厅时清掉上一次的自由推荐上下文，避免残留跨店显示
+  _customRecResults = null;
+  _customRecQuery = '';
+  _customRecTags = [];
+  _menuVersion++; // 载入历史等价于换菜单，让残留的旧 enrichMenuAsync 回来时丢弃结果
   renderMenu();
   if (recommendations) renderRecommendations();
   switchPage('menu');
@@ -4365,25 +4392,32 @@ function copyShareUrl() {
 // === Guest Mode (shared menu view) ===
 let isGuestMode = false;
 
+// 分享数据来自外部 URL / KV，可能被伪造 —— 所有会进 innerHTML 的字符串必须先去 HTML 特殊字符，避免 XSS
+function sanitizeShareStr(v) {
+  if (v == null) return '';
+  return String(v).replace(/[<>"'&]/g, ch => ({'<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','&':'&amp;'}[ch]));
+}
+
 function parseSharedData(data) {
+  const S = sanitizeShareStr;
   // Reconstruct menuData from compressed/stored format
   menuData = {
-    shopName: data.s || '',
-    shopNameCN: data.sc || '',
-    cuisine: data.cu || '',
+    shopName: S(data.s),
+    shopNameCN: S(data.sc),
+    cuisine: S(data.cu),
     categories: (data.c || []).map(cat => ({
-      name: cat.n,
-      nameCN: cat.nc,
+      name: S(cat.n),
+      nameCN: S(cat.nc),
       items: (cat.i || []).map(item => ({
-        name: item.n,
-        nameCN: item.nc,
-        description: item.d || '',
-        price: item.p || '',
+        name: S(item.n),
+        nameCN: S(item.nc),
+        description: S(item.d),
+        price: S(item.p),
         priceNum: item.pn || 0,
         spicy: item.sp || 0,
         popular: !!item.po,
         isSet: !!item.is,
-        includes: item.inc || []
+        includes: (item.inc || []).map(S)
       }))
     }))
   };
@@ -4393,11 +4427,18 @@ function parseSharedData(data) {
     ['forOne', 'forTwo', 'forFour'].forEach(key => {
       if (data.r[key]) {
         recommendations[key] = data.r[key].map(rec => ({
-          name: rec.n,
-          items: rec.i || [],
+          name: S(rec.n),
+          // items 可能是字符串或对象；对象结构走 renderRecommendations 里的字段，逐个转义
+          items: (rec.i || []).map(it => {
+            if (typeof it === 'string') return S(it);
+            if (it && typeof it === 'object') {
+              return { ...it, n: S(it.n), name: S(it.name) };
+            }
+            return it;
+          }),
           total: typeof rec.t === 'number' ? rec.t : 0,
-          totalPrice: typeof rec.t === 'string' ? rec.t : (rec.t ? String(rec.t) : ''),
-          reason: rec.re || ''
+          totalPrice: typeof rec.t === 'string' ? S(rec.t) : (rec.t ? S(String(rec.t)) : ''),
+          reason: S(rec.re)
         }));
       } else {
         recommendations[key] = [];
