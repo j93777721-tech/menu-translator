@@ -2566,35 +2566,65 @@ function switchRec(type) {
   `}).join('');
 }
 
+// Match recommendation items to menu items using best-match priority.
+// Each rec item claims exactly ONE menu item (highest scoring), avoiding the
+// over-matching bug where "鸡肉卡拉希" would also select "鸡肉提卡" etc.
+function matchRecItemsToMenu(recItems) {
+  // Flatten menu into a lookup list
+  const flat = [];
+  let gi = 0;
+  menuData.categories.forEach(cat => {
+    cat.items.forEach(item => {
+      flat.push({ index: gi, nameCN: item.nameCN || '' });
+      gi++;
+    });
+  });
+
+  const result = {};
+  const claimed = new Set();
+
+  (recItems || []).forEach(recItem => {
+    let name, qty;
+    if (typeof recItem === 'object' && recItem.n) {
+      name = recItem.n;
+      qty = recItem.qty || 1;
+    } else {
+      const m = String(recItem).match(/(.+?)\s*[xX×]\s*(\d+)/);
+      name = m ? m[1].trim() : String(recItem).trim();
+      qty = m ? parseInt(m[2]) : 1;
+    }
+    if (!name) return;
+
+    // Score every candidate, pick the single best
+    let best = null, bestScore = 0;
+    for (const cand of flat) {
+      const cn = cand.nameCN;
+      if (!cn) continue;
+      let score = 0;
+      if (cn === name) score = 100;                                  // exact
+      else if (cn.includes(name)) score = 80 - (cn.length - name.length); // menu name contains rec name
+      else if (name.includes(cn)) score = 70 - (name.length - cn.length); // rec name contains menu name
+      else if (name.length >= 2 && cn.length >= 2 &&
+               cn.slice(0, 2) === name.slice(0, 2)) score = 20;      // weak prefix fallback
+      if (score <= 0) continue;
+      // Prefer unclaimed items so duplicates in a plan map to distinct dishes
+      if (claimed.has(cand.index)) score -= 50;
+      if (score > bestScore) { bestScore = score; best = cand; }
+    }
+
+    if (best) {
+      result[best.index] = (result[best.index] || 0) + qty;
+      claimed.add(best.index);
+    }
+  });
+
+  return result;
+}
+
 function useRecommendation(key, index) {
   const rec = recommendations[key][index];
   // Clear current selection and set recommendation items
-  selectedItems = {};
-  // Try to match recommendation items to menu items
-  let globalIndex = 0;
-  menuData.categories.forEach(cat => {
-    cat.items.forEach(item => {
-      (rec.items || []).forEach(recItem => {
-        let name, qty;
-        if (typeof recItem === 'object' && recItem.n) {
-          // New structured format
-          name = recItem.n;
-          qty = recItem.qty || 1;
-        } else {
-          // Legacy string format
-          const match = String(recItem).match(/(.+?)\s*[xX×]\s*(\d+)/);
-          name = match ? match[1].trim() : String(recItem).trim();
-          qty = match ? parseInt(match[2]) : 1;
-        }
-        const cn = item.nameCN || '';
-        if (cn === name || cn.includes(name) || name.includes(cn) ||
-            (name.length >= 2 && cn.length >= 2 && (cn.slice(0,2) === name.slice(0,2)))) {
-          selectedItems[globalIndex] = (selectedItems[globalIndex] || 0) + qty;
-        }
-      });
-      globalIndex++;
-    });
-  });
+  selectedItems = matchRecItemsToMenu(rec.items);
 
   // If no matches found, just generate order from rec items text
   if (Object.keys(selectedItems).length === 0) {
@@ -2830,30 +2860,7 @@ function useCustomRec(index) {
   if (!_customRecResults || !_customRecResults[index]) return;
   const rec = _customRecResults[index];
 
-  // Same logic as useRecommendation - match items to menu
-  selectedItems = {};
-  let globalIndex = 0;
-  menuData.categories.forEach(cat => {
-    cat.items.forEach(item => {
-      (rec.items || []).forEach(recItem => {
-        let name, qty;
-        if (typeof recItem === 'object' && recItem.n) {
-          name = recItem.n;
-          qty = recItem.qty || 1;
-        } else {
-          const match = String(recItem).match(/(.+?)\s*[xX×]\s*(\d+)/);
-          name = match ? match[1].trim() : String(recItem).trim();
-          qty = match ? parseInt(match[2]) : 1;
-        }
-        const cn = item.nameCN || '';
-        if (cn === name || cn.includes(name) || name.includes(cn) ||
-            (name.length >= 2 && cn.length >= 2 && (cn.slice(0,2) === name.slice(0,2)))) {
-          selectedItems[globalIndex] = (selectedItems[globalIndex] || 0) + qty;
-        }
-      });
-      globalIndex++;
-    });
-  });
+  selectedItems = matchRecItemsToMenu(rec.items);
 
   if (Object.keys(selectedItems).length === 0) {
     generateOrderFromRec(rec);
