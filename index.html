@@ -1296,8 +1296,21 @@ function saveCurrency() {
   safeText('currencyBadge', s.currency + '→¥');
   closeCurrencyPicker();
   showToast('币种已更新');
-  // 如果已有菜单，刷新价格显示
-  if (menuData) renderMenu();
+  // 币种变了不止菜单要刷，推荐/订单/自由推荐/浮动栏总价里的 ≈¥ 换算都会显示旧值
+  refreshAllPriceViews();
+}
+
+// 汇率/币种变更后统一刷新所有出现 ≈¥ 的视图，避免用户切了币种但订单页仍是老换算
+function refreshAllPriceViews() {
+  if (!menuData) return;
+  try { renderMenu(); } catch (e) { console.warn(e); }
+  try { if (recommendations) renderRecommendations(); } catch (e) { console.warn(e); }
+  try { if (_customRecResults && _customRecResults.length) renderCustomRecResults(_customRecResults, false); } catch (e) { console.warn(e); }
+  // 订单页当前有菜品时重画一次小票
+  try {
+    if (currentPage === 'order' && Object.keys(selectedItems).length > 0) generateOrderSlip();
+  } catch (e) { console.warn(e); }
+  try { updateOrderBadge(); } catch (e) { console.warn(e); }
 }
 
 // === 位置定位 & 自动币种 ===
@@ -1377,9 +1390,10 @@ function applyLocationCurrency(loc) {
     s.currency = loc.currency;
     s.exchangeRate = loc.rate || s.exchangeRate;
     localStorage.setItem('menuToolSettings', JSON.stringify(s));
+    _settingsCache = null; // 不清缓存，下次 getSettings() 还是老对象，导致 UI 与真实设置不一致
     safeText('currencyBadge', s.currency + '→¥');
-    // 如有菜单则刷新价格
-    if (menuData) renderMenu();
+    // 币种变了要刷全部视图（推荐/订单/自由推荐/浮动栏），不只是菜单页
+    refreshAllPriceViews();
   }
 }
 
@@ -3702,10 +3716,27 @@ function fetchWithTimeout(url, options, ms = 60000) {
 
 // Session persistence (localStorage - survives tab close)
 function saveSession() {
+  const data = { menuData, recommendations, selectedItems, ts: Date.now() };
+  safeSetLocalStorage('menuSession', JSON.stringify(data), ['menuSession']);
+}
+
+// localStorage 写入的安全通道：超限（QuotaExceededError）时先删掉不重要的键再重试一次，
+// 依然写不进就静默丢弃，避免用户任何一步操作因为满盘卡死或抛红屏。
+// evictable 是优先可牺牲的键列表；订单/菜单历史不放进来，宁可整批不写也不能只写一半。
+function safeSetLocalStorage(key, value, evictable) {
   try {
-    const data = { menuData, recommendations, selectedItems, ts: Date.now() };
-    localStorage.setItem('menuSession', JSON.stringify(data));
-  } catch(e) { /* quota exceeded, ignore */ }
+    localStorage.setItem(key, value);
+    return true;
+  } catch (e) {
+    if (!(e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014))) {
+      console.warn('localStorage.setItem failed:', e);
+      return false;
+    }
+    // 清可牺牲的键，再试一次
+    (evictable || []).forEach(k => { try { localStorage.removeItem(k); } catch (_) {} });
+    try { localStorage.setItem(key, value); return true; }
+    catch (e2) { console.warn('localStorage still full after eviction:', e2); return false; }
+  }
 }
 
 function restoreSession() {
@@ -3799,7 +3830,13 @@ function saveToHistory() {
   filtered.unshift(entry);
   // Keep max 10
   if (filtered.length > 10) filtered.length = 10;
-  localStorage.setItem('menuHistory', JSON.stringify(filtered));
+  // 满盘时先扔 session 缓存腾空间，仍失败就再砍一半历史再写
+  if (!safeSetLocalStorage('menuHistory', JSON.stringify(filtered), ['menuSession'])) {
+    while (filtered.length > 1) {
+      filtered.pop();
+      if (safeSetLocalStorage('menuHistory', JSON.stringify(filtered), [])) break;
+    }
+  }
   renderHistory();
 }
 
@@ -3825,7 +3862,13 @@ function saveOrderToHistory(orderItems, totalPrice, remarks) {
   allOrders[shopKey].unshift(order);
   // Keep max 10 orders per shop
   if (allOrders[shopKey].length > 10) allOrders[shopKey].length = 10;
-  localStorage.setItem('orderHistory', JSON.stringify(allOrders));
+  // 与菜单历史同策略：满盘时先扔 session，再仍失败则递减该店订单数直到写入成功
+  if (!safeSetLocalStorage('orderHistory', JSON.stringify(allOrders), ['menuSession'])) {
+    while (allOrders[shopKey].length > 1) {
+      allOrders[shopKey].pop();
+      if (safeSetLocalStorage('orderHistory', JSON.stringify(allOrders), [])) break;
+    }
+  }
 }
 
 function loadFromHistory(id) {
@@ -4274,21 +4317,7 @@ function showQrHealth(shortOk, backupOk) {
 
 function copyBackupUrl() {
   if (!_shareBackupUrl) { showToast('备用链接不可用'); return; }
-  const ta = document.createElement('textarea');
-  ta.value = _shareBackupUrl;
-  document.body.appendChild(ta);
-  ta.select();
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(_shareBackupUrl);
-    } else {
-      document.execCommand('copy');
-    }
-    showToast('备用链接已复制，建议存到备忘录');
-  } catch (e) {
-    showToast('复制失败，请长按选择');
-  }
-  document.body.removeChild(ta);
+  writeClipboard(_shareBackupUrl, '备用链接已复制，建议存到备忘录', '复制失败，请长按选择');
 }
 
 function closeShareModal() {
@@ -4375,17 +4404,30 @@ function saveQrImage() {
 
 function copyShareUrl() {
   if (!shareUrl) return;
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(shareUrl).then(() => showToast('链接已复制'));
-  } else {
-    // Fallback
+  writeClipboard(shareUrl, '链接已复制', '复制失败，请长按选择');
+}
+
+// 统一的复制入口：优先 navigator.clipboard，失败/无权限时回退到 execCommand，
+// 全流程都能拿到明确的成功/失败反馈，避免 iOS/HTTP 环境下静默失败或"假成功"。
+function writeClipboard(text, okToast, failToast) {
+  if (!text) return;
+  const fallback = () => {
     const ta = document.createElement('textarea');
-    ta.value = shareUrl;
+    ta.value = text;
+    ta.style.position = 'fixed'; ta.style.left = '-9999px';
     document.body.appendChild(ta);
     ta.select();
-    document.execCommand('copy');
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
     document.body.removeChild(ta);
-    showToast('链接已复制');
+    showToast(ok ? okToast : (failToast || '复制失败，请长按选择'));
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+    navigator.clipboard.writeText(text)
+      .then(() => showToast(okToast))
+      .catch(() => fallback());
+  } else {
+    fallback();
   }
 }
 
