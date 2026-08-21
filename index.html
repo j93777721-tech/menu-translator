@@ -807,10 +807,10 @@ let currentRecType = 1;
 // === Settings ===
 const DEFAULT_SETTINGS = {
   provider: 'custom',
-  endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-  key: 'sk-ws-H.EYMYPPE.qSmY.MEUCICPGWH98j5d4jYsm7ykmdVpiv-R1O79Lshge_dbYIA4UAiEA19Bj0re1_ua5Q2eQd0tnv1D-d7hmBUaJvPK3fPaqD-0',
-  model: 'qwen-plus',
-  visionModel: 'qwen-vl-max',
+  endpoint: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+  key: 'sk-sp-H.DIHEPE.F3l0.MEUCIQCwCaIpzx7aUpjsn6eO9R53dFlQgmeQj9xE254WW4FLRgIgRI_Yyizsk6r2h1Iq4E8mO6MDu7ZdPL-m9F9BoO1xgkU',
+  model: 'qwen3.7-plus',
+  visionModel: 'qwen3.6-flash',
   proxy: '',
   currency: 'PKR',
   exchangeRate: 39
@@ -997,9 +997,26 @@ function compressImage(dataUrl, level = 0) {
   });
 }
 
+// === 智能代理检测 ===
+function getApiUrl(settings) {
+  // 1. 用户手动配置了代理
+  if (settings.proxy) return settings.proxy;
+  // 2. 部署在 Vercel 上，自动用内置 /api/proxy
+  const host = location.hostname;
+  if (host.includes('.vercel.app') || host.includes('vercel')) {
+    return location.origin + '/api/proxy';
+  }
+  // 3. localhost 开发环境直连
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return settings.endpoint;
+  }
+  // 4. 其他环境（如 GitHub Pages）需要代理才能工作
+  return settings.endpoint;
+}
+
 // === 网络预检 ===
 async function checkConnection(settings) {
-  const url = settings.proxy || settings.endpoint;
+  const url = getApiUrl(settings);
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
@@ -1268,7 +1285,7 @@ async function callVisionAPI(prompt, imgs, timeout = 60000) {
     });
   });
 
-  const url = settings.proxy || settings.endpoint;
+  const url = getApiUrl(settings);
   const resp = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
@@ -1277,9 +1294,13 @@ async function callVisionAPI(prompt, imgs, timeout = 60000) {
     },
     body: JSON.stringify({
       model: settings.visionModel || settings.model,
-      messages: [{ role: 'user', content }],
+      messages: [
+        { role: 'system', content: '你是菜单识别助手。直接输出JSON，不要解释。' },
+        { role: 'user', content }
+      ],
       max_tokens: 2048,
-      temperature: 0.1
+      temperature: 0.1,
+      chat_template_kwargs: { enable_thinking: false }
     })
   }, timeout);
 
@@ -1294,7 +1315,7 @@ async function callVisionAPI(prompt, imgs, timeout = 60000) {
 
 async function callTextAPI(prompt) {
   const settings = getSettings();
-  const url = settings.proxy || settings.endpoint;
+  const url = getApiUrl(settings);
   const resp = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
@@ -1303,9 +1324,13 @@ async function callTextAPI(prompt) {
     },
     body: JSON.stringify({
       model: settings.model,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        { role: 'system', content: '直接输出JSON，不要解释或使用代码块。' },
+        { role: 'user', content: prompt }
+      ],
       max_tokens: 2048,
-      temperature: 0.7
+      temperature: 0.3,
+      chat_template_kwargs: { enable_thinking: false }
     })
   }, 60000);
 
