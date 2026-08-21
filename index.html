@@ -2779,17 +2779,17 @@ function fetchWithTimeout(url, options, ms = 60000) {
     .finally(() => clearTimeout(timer));
 }
 
-// Session persistence
+// Session persistence (localStorage - survives tab close)
 function saveSession() {
   try {
-    const data = { menuData, recommendations, selectedItems };
-    sessionStorage.setItem('menuSession', JSON.stringify(data));
+    const data = { menuData, recommendations, selectedItems, ts: Date.now() };
+    localStorage.setItem('menuSession', JSON.stringify(data));
   } catch(e) { /* quota exceeded, ignore */ }
 }
 
 function restoreSession() {
   try {
-    const saved = sessionStorage.getItem('menuSession');
+    const saved = localStorage.getItem('menuSession');
     if (!saved) return false;
     const data = JSON.parse(saved);
     if (data.menuData) { menuData = data.menuData; renderMenu(); }
