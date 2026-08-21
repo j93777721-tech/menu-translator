@@ -2115,9 +2115,11 @@ function renderMenu() {
   const shopDescEl = document.getElementById('shopDesc');
   if (shopNameEl) {
     shopNameEl.textContent = displayName;
-    shopNameEl.onclick = () => editShopName();
-    shopNameEl.style.cursor = 'pointer';
-    shopNameEl.title = '点击修改店名';
+    if (!isGuestMode) {
+      shopNameEl.onclick = () => editShopName();
+      shopNameEl.style.cursor = 'pointer';
+      shopNameEl.title = '点击修改店名';
+    }
   }
   if (shopDescEl) {
     shopDescEl.textContent = `${menuData.shopName || ''} · ${menuData.cuisine || '当地美食'}`;
@@ -2171,11 +2173,7 @@ function filterCategory(catIndex) {
   document.querySelectorAll('.cat-tab').forEach((t, i) => {
     t.classList.toggle('active', i === catIndex + 1);
   });
-  if (isGuestMode) {
-    renderGuestMenuItems(catIndex);
-  } else {
-    renderMenuItems(catIndex);
-  }
+  renderMenuItems(catIndex);
 }
 
 function renderMenuItems(catIndex) {
@@ -3072,7 +3070,9 @@ function shareMenu() {
         p: item.price || '',
         pn: item.priceNum || 0,
         sp: item.spicy || 0,
-        po: item.popular ? 1 : 0
+        po: item.popular ? 1 : 0,
+        is: item.isSet ? 1 : 0,
+        inc: item.isSet && item.includes ? item.includes : []
       }))
     }))
   };
@@ -3162,7 +3162,9 @@ function tryLoadSharedMenu() {
           price: item.p || '',
           priceNum: item.pn || 0,
           spicy: item.sp || 0,
-          popular: !!item.po
+          popular: !!item.po,
+          isSet: !!item.is,
+          includes: item.inc || []
         }))
       }))
     };
@@ -3176,13 +3178,15 @@ function tryLoadSharedMenu() {
 }
 
 function enterGuestMode() {
-  // Hide camera/order/recommend nav items, show only menu
-  const bottomNav = document.querySelector('.bottom-nav');
-  if (bottomNav) bottomNav.style.display = 'none';
-  const guestFloatBar = document.getElementById('orderFloatBar');
-  if (guestFloatBar) guestFloatBar.style.display = 'none';
+  // 隐藏"拍菜单"tab，保留其他导航
+  const navItems = document.querySelectorAll('.nav-item');
+  if (navItems[0]) navItems[0].style.display = 'none'; // 拍菜单
 
-  // Render menu with guest banner
+  // 隐藏历史区域（guest 没有自己的扫描历史）
+  const historySection = document.getElementById('historySection');
+  if (historySection) historySection.style.display = 'none';
+
+  // 替换 shopInfo 为 guest banner（不可编辑店名）
   const shopInfo = document.getElementById('shopInfo');
   if (shopInfo) shopInfo.innerHTML = `
     <div class="guest-banner">
@@ -3194,55 +3198,17 @@ function enterGuestMode() {
     </div>
   `;
 
-  // Render currency info
+  // 币种初始化
   const s = getSettings();
   safeText('currencyBadge', s.currency + '→¥');
 
+  // 正常渲染（含 +/- 下单按钮）
   renderMenu();
-  // Force switch to menu page (bypass same-page check)
+  renderRecommendations();
+
+  // 切到菜单页
   currentPage = '';
   switchPage('menu', false);
-
-  // In guest mode, body doesn't need bottom padding for nav
-  document.body.style.paddingBottom = '20px';
-
-  // Override renderMenu to show guest-friendly layout (no qty buttons)
-  renderGuestMenuItems(-1);
-}
-
-function renderGuestMenuItems(catIndex) {
-  const list = document.getElementById('menuList');
-  if (!list) return;
-  let items = [];
-  let globalIndex = 0;
-  const s = getSettings();
-
-  menuData.categories.forEach((cat, ci) => {
-    cat.items.forEach((item, ii) => {
-      if (catIndex === -1 || catIndex === ci) {
-        items.push({ ...item, catName: cat.nameCN, globalIndex });
-      }
-      globalIndex++;
-    });
-  });
-
-  list.innerHTML = items.map(item => {
-    const spicyStr = item.spicy > 0 ? ' 🌶️'.repeat(item.spicy) : '';
-    const popularStr = item.popular ? ' 🔥' : '';
-    return `
-      <div class="menu-item">
-        <div class="menu-item-info">
-          <div class="menu-item-name">${item.nameCN}${spicyStr}${popularStr}</div>
-          <div class="menu-item-original">${item.name}</div>
-          ${item.description ? `<div class="menu-item-desc">${item.description}</div>` : ''}
-        </div>
-        <div class="menu-item-price">
-          ${item.price || ''}
-          ${item.priceNum ? `<div style="font-size:11px;color:#888;margin-top:2px;">≈¥${toRmb(item.priceNum)}</div>` : ''}
-        </div>
-      </div>
-    `;
-  }).join('');
 }
 
 // === Init ===
