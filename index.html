@@ -229,6 +229,8 @@ body {
 .menu-item-name { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
 .menu-item-original { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
 .menu-item-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
+.menu-item-desc.loading-hint { color: #aaa; font-style: italic; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:1} }
 .menu-item-price { font-size: 15px; font-weight: 700; color: var(--accent); white-space: nowrap; }
 .menu-item-qty {
   display: flex;
@@ -1021,71 +1023,98 @@ async function startRecognition() {
     const totalSizeKB = compressed.reduce((s, img) => s + (img.length * 0.75 / 1024), 0).toFixed(0);
     setLoadingText(`图片已压缩(${totalSizeKB}KB)，正在识别菜单...`);
     
-    // Step 1: Recognize menu with retry
-    setLoadingText('正在识别菜单（可能需要15-30秒）...');
+    // === Phase 1: 快速识别菜名+价格（~6s） ===
+    setLoadingText('正在识别菜品（预计5-10秒）...');
     const menuResult = await withRetry(async () => {
       return await callVisionAPI(buildMenuPrompt(), compressed);
-    }, 1);
+    }, 2); // 2次重试提升成功率
     menuData = parseMenuJSON(menuResult);
+    
+    // 立即渲染菜单 & 切换页面 — 用户先看到结果
     renderMenu();
-    saveSession(); // persist
-
-    // Step 2: Generate recommendations with retry
-    setLoadingText('正在生成推荐搭配...');
-    const recResult = await withRetry(async () => {
-      return await callTextAPI(buildRecPrompt(menuData));
-    }, 1);
-    recommendations = parseRecJSON(recResult);
-    renderRecommendations();
-    saveSession(); // persist
-
+    saveSession();
     hideLoading();
     saveToHistory();
     switchPage('menu');
-    showToast('识别完成！');
+    showToast('菜单已识别！正在补充详情...');
+
+    // === Phase 2: 异步补充辣度/描述/推荐（后台静默执行） ===
+    enrichMenuAsync(menuData);
   } catch (err) {
     hideLoading();
     const msg = err.message.includes('JSON') ? 
-      '识别结果格式异常，请重试' : '识别失败: ' + err.message;
+      '识别结果格式异常，请重试' : 
+      err.message.includes('timeout') ?
+      '网络超时，请检查代理设置后重试' : '识别失败: ' + err.message;
     showToast(msg);
     console.error(err);
   }
 }
 
-function buildMenuPrompt() {
-  return `你是一个专业的菜单翻译助手。我在巴基斯坦拉合尔的一家餐厅，请帮我识别这份菜单。
+// Phase2 后台异步补充（不阻塞用户浏览菜单）
+async function enrichMenuAsync(menu) {
+  try {
+    // 2a: 补充辣度+描述+热门标记
+    const enrichResult = await callTextAPI(buildEnrichPrompt(menu));
+    const enrichData = parseEnrichJSON(enrichResult);
+    applyEnrichData(menu, enrichData);
+    renderMenu(); // 刷新 UI 显示新信息
+    saveSession();
 
-请输出严格的 JSON 格式（不要包含 markdown 代码块标记），结构如下：
-{
-  "shopName": "店铺名称（如果能识别到的话）",
-  "shopNameCN": "店铺名称中文翻译",
-  "cuisine": "菜系类型（如巴基斯坦菜、烧烤、中餐等）",
-  "categories": [
-    {
-      "name": "分类名（英文/乌尔都语原文）",
-      "nameCN": "分类中文名",
-      "items": [
-        {
-          "name": "菜品原名",
-          "nameCN": "中文翻译",
-          "description": "简短中文描述（食材、口味、做法）",
-          "price": "价格（保留原始货币）",
-          "priceNum": 数字价格,
-          "spicy": 0-3,
-          "popular": true/false
-        }
-      ]
-    }
-  ]
+    // 2b: 生成推荐搭配
+    const recResult = await callTextAPI(buildRecPrompt(menu));
+    recommendations = parseRecJSON(recResult);
+    renderRecommendations();
+    saveSession();
+    showToast('详情和推荐已更新 ✓');
+  } catch (err) {
+    console.warn('Phase2 enrich failed (non-critical):', err.message);
+    // Phase2 失败不影响已有菜单，静默处理
+  }
 }
 
-要求：
-1. 准确翻译每道菜的名称为中文
-2. 用通俗易懂的中文描述菜品的做法和口味
-3. 标注辣度（0=不辣, 1=微辣, 2=中辣, 3=很辣）
-4. 如果菜品看起来是热门/招牌菜，标注 popular=true
-5. 价格保持原始格式（巴基斯坦卢比 Rs/PKR）
-6. 如果无法确定币种请在shopName旁标注你猜测的币种`;
+function parseEnrichJSON(text) {
+  text = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start === -1 || end === -1) return [];
+  return JSON.parse(text.substring(start, end + 1));
+}
+
+function applyEnrichData(menu, enrichArr) {
+  let idx = 0;
+  menu.categories.forEach(cat => {
+    cat.items.forEach(item => {
+      if (idx < enrichArr.length) {
+        const e = enrichArr[idx];
+        if (e.desc) item.description = e.desc;
+        if (e.spicy !== undefined) item.spicy = e.spicy;
+        if (e.popular !== undefined) item.popular = e.popular;
+      }
+      idx++;
+    });
+  });
+}
+
+// Phase1: 极简 prompt — 仅提取菜名+价格，最小化输出 token (~6s)
+function buildMenuPrompt() {
+  return `识别菜单图片，输出JSON（无代码块标记）：
+{"shopName":"原名","shopNameCN":"中文","cuisine":"菜系","categories":[{"name":"原分类名","nameCN":"中文","items":[{"name":"原菜名","nameCN":"中文译名","price":"原价","priceNum":数字}]}]}
+要求：准确翻译菜名为中文，价格保持原始货币格式，priceNum为纯数字。`;
+}
+
+// Phase2: 异步补充辣度/描述/热门标记（用文本模型，不需要图片）
+function buildEnrichPrompt(menu) {
+  const items = [];
+  menu.categories.forEach(cat => {
+    cat.items.forEach(item => { items.push(item.nameCN + '(' + item.name + ')'); });
+  });
+  return `以下是${menu.cuisine || '当地'}餐厅"${menu.shopNameCN}"的菜品列表：
+${items.join('、')}
+
+为每道菜补充信息，输出JSON数组（无代码块），顺序与上面完全一致：
+[{"desc":"一句话描述食材口味做法","spicy":0到3,"popular":true/false}]
+spicy: 0不辣 1微辣 2中辣 3很辣。popular: 招牌或热门菜标true。desc不超过15字。`;
 }
 
 function buildRecPrompt(menu) {
@@ -1239,12 +1268,15 @@ function renderMenuItems(catIndex) {
     const qty = selectedItems[item.globalIndex] || 0;
     const spicyStr = item.spicy > 0 ? ' 🌶️'.repeat(item.spicy) : '';
     const popularStr = item.popular ? ' 🔥' : '';
+    const descHtml = item.description 
+      ? `<div class="menu-item-desc">${item.description}</div>`
+      : `<div class="menu-item-desc loading-hint">详情加载中...</div>`;
     return `
       <div class="menu-item ${qty > 0 ? 'selected' : ''}" id="menuItem${item.globalIndex}">
         <div class="menu-item-info">
           <div class="menu-item-name">${item.nameCN}${spicyStr}${popularStr}</div>
           <div class="menu-item-original">${item.name}</div>
-          <div class="menu-item-desc">${item.description || ''}</div>
+          ${descHtml}
           <div class="menu-item-qty">
             ${qty > 0 ? `
               <button class="qty-btn" onclick="changeQty(${item.globalIndex}, -1)">−</button>
