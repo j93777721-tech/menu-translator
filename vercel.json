@@ -6,6 +6,9 @@
     }
   },
   "rewrites": [
-    { "source": "/api/proxy", "destination": "/api/proxy.js" }
+    { "source": "/api/proxy", "destination": "/api/proxy.js" },
+    { "source": "/api/save", "destination": "/api/save.js" },
+    { "source": "/api/menu", "destination": "/api/menu.js" },
+    { "source": "/s/:id", "destination": "/index.html" }
   ]
 }

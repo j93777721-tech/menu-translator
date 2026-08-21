@@ -3232,10 +3232,10 @@ const DEMO_RECOMMENDATIONS = {
 // === Share & QR Code ===
 let shareUrl = '';
 
-function shareMenu() {
+async function shareMenu() {
   if (!menuData) { showToast('暂无菜单数据'); return; }
 
-  // === Full link data (contains everything for rich experience) ===
+  // === Build full share data (link uses this — complete with recommendations) ===
   const fullData = {
     s: menuData.shopName || '',
     sc: menuData.shopNameCN || '',
@@ -3269,74 +3269,59 @@ function shareMenu() {
       }
     });
   }
-  const fullJson = JSON.stringify(fullData);
-  const fullCompressed = LZString.compressToEncodedURIComponent(fullJson);
+
+  // Link always uses compressed full data (fallback, works offline)
   const baseUrl = location.origin + location.pathname;
+  const fullCompressed = LZString.compressToEncodedURIComponent(JSON.stringify(fullData));
   shareUrl = baseUrl + '?m=' + fullCompressed;
 
-  // === QR data: menu only (no recommendations), compact for clean QR ===
-  const qrData = {
-    s: menuData.shopName || '',
-    sc: menuData.shopNameCN || '',
-    cu: menuData.cuisine || '',
-    c: menuData.categories.map(cat => ({
-      n: cat.name,
-      nc: cat.nameCN,
-      i: cat.items.map(item => ({
-        n: item.name,
-        nc: item.nameCN,
-        p: item.price || '',
-        pn: item.priceNum || 0,
-        sp: item.spicy || 0,
-        po: item.popular ? 1 : 0,
-        is: item.isSet ? 1 : 0,
-        inc: item.isSet && item.includes ? item.includes : []
-      }))
-    }))
-  };
-
-  // Show modal
+  // Show modal immediately with loading state
   const shopLabel = menuData.shopNameCN || menuData.shopName || '店铺菜单';
   safeClass('shareModal', 'add', 'active');
   safeText('shareTitle', shopLabel);
-
-  // Generate QR — menu-only data (much smaller, cleaner code)
   const qrContainer = document.getElementById('qrContainer');
-  qrContainer.innerHTML = '';
+  qrContainer.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary);font-size:13px;">生成中...</div>';
   const qrNote = document.getElementById('qrNote');
+  if (qrNote) qrNote.textContent = '';
 
-  const qrOpts = { width: 240, height: 240, colorDark: '#1B5E20', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.L };
-  let qrSuccess = false;
-
-  // Attempt 1: menu with all fields (no desc, no recommendations)
+  // === Save to Redis and get short ID for QR ===
+  let shortUrl = null;
   try {
-    const qrUrl = baseUrl + '?m=' + LZString.compressToEncodedURIComponent(JSON.stringify(qrData));
-    new QRCode(qrContainer, { ...qrOpts, text: qrUrl });
-    qrSuccess = true;
-    if (qrNote) qrNote.textContent = '扫码查看菜单 · 直接点餐';
-  } catch(e1) {
-    qrContainer.innerHTML = '';
-    // Attempt 2: strip includes (set menu sub-items)
+    const res = await fetch('/api/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: fullData })
+    });
+    if (res.ok) {
+      const { id } = await res.json();
+      shortUrl = `${location.origin}/s/${id}`;
+    }
+  } catch (e) {
+    console.warn('Save to KV failed, falling back to compressed URL:', e);
+  }
+
+  // Generate QR — use short URL if available, otherwise fall back to compressed
+  qrContainer.innerHTML = '';
+  const qrOpts = { width: 240, height: 240, colorDark: '#1B5E20', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M };
+
+  if (shortUrl) {
+    // Short URL — very clean QR code
     try {
-      const lite = JSON.parse(JSON.stringify(qrData));
-      lite.c.forEach(cat => { cat.i.forEach(item => { delete item.inc; delete item.is; }); });
-      const liteUrl = baseUrl + '?m=' + LZString.compressToEncodedURIComponent(JSON.stringify(lite));
-      new QRCode(qrContainer, { ...qrOpts, text: liteUrl });
-      qrSuccess = true;
+      new QRCode(qrContainer, { ...qrOpts, text: shortUrl });
       if (qrNote) qrNote.textContent = '扫码查看菜单 · 直接点餐';
-    } catch(e2) {
-      qrContainer.innerHTML = '';
-      // Attempt 3: minimal — names + prices only
-      try {
-        const min = { s: qrData.s, sc: qrData.sc, c: qrData.c.map(cat => ({ n: cat.n, nc: cat.nc, i: cat.i.map(item => ({ n: item.n, nc: item.nc, p: item.p, pn: item.pn })) })) };
-        const minUrl = baseUrl + '?m=' + LZString.compressToEncodedURIComponent(JSON.stringify(min));
-        new QRCode(qrContainer, { ...qrOpts, text: minUrl });
-        qrSuccess = true;
-        if (qrNote) qrNote.textContent = '扫码查看菜单 · 直接点餐';
-      } catch(e3) {
-        qrContainer.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px;">菜品过多，请用链接分享</div>';
-        if (qrNote) qrNote.textContent = '';
-      }
+    } catch(e) {
+      qrContainer.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px;">二维码生成失败</div>';
+    }
+  } else {
+    // Fallback: compressed data in QR (old behavior, denser)
+    const qrData = { s: fullData.s, sc: fullData.sc, cu: fullData.cu, c: fullData.c.map(cat => ({ n: cat.n, nc: cat.nc, i: cat.i.map(item => ({ n: item.n, nc: item.nc, p: item.p, pn: item.pn })) })) };
+    const fallbackOpts = { ...qrOpts, correctLevel: QRCode.CorrectLevel.L };
+    try {
+      const fbUrl = baseUrl + '?m=' + LZString.compressToEncodedURIComponent(JSON.stringify(qrData));
+      new QRCode(qrContainer, { ...fallbackOpts, text: fbUrl });
+      if (qrNote) qrNote.textContent = '扫码查看菜单 · 直接点餐';
+    } catch(e) {
+      qrContainer.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px;">菜品过多，请用链接分享</div>';
     }
   }
 }
@@ -3404,11 +3389,71 @@ function copyShareUrl() {
 // === Guest Mode (shared menu view) ===
 let isGuestMode = false;
 
-function tryLoadSharedMenu() {
-  // Try multiple ways to get the 'm' parameter (some browsers/apps may handle URLs differently)
+function parseSharedData(data) {
+  // Reconstruct menuData from compressed/stored format
+  menuData = {
+    shopName: data.s || '',
+    shopNameCN: data.sc || '',
+    cuisine: data.cu || '',
+    categories: (data.c || []).map(cat => ({
+      name: cat.n,
+      nameCN: cat.nc,
+      items: (cat.i || []).map(item => ({
+        name: item.n,
+        nameCN: item.nc,
+        description: item.d || '',
+        price: item.p || '',
+        priceNum: item.pn || 0,
+        spicy: item.sp || 0,
+        popular: !!item.po,
+        isSet: !!item.is,
+        includes: item.inc || []
+      }))
+    }))
+  };
+  // Reconstruct recommendations if present
+  if (data.r) {
+    recommendations = {};
+    ['forOne', 'forTwo', 'forFour'].forEach(key => {
+      if (data.r[key]) {
+        recommendations[key] = data.r[key].map(rec => ({
+          name: rec.n,
+          items: rec.i || [],
+          total: typeof rec.t === 'number' ? rec.t : 0,
+          totalPrice: typeof rec.t === 'string' ? rec.t : (rec.t ? String(rec.t) : ''),
+          reason: rec.re || ''
+        }));
+      } else {
+        recommendations[key] = [];
+      }
+    });
+  }
+  isGuestMode = true;
+}
+
+async function tryLoadSharedMenu() {
+  // === Method 1: Short URL path /s/[id] — fetch from API ===
+  const pathMatch = location.pathname.match(/^\/s\/([a-z0-9]{4,12})$/);
+  if (pathMatch) {
+    const id = pathMatch[1];
+    try {
+      const res = await fetch(`/api/menu?id=${id}`);
+      if (res.ok) {
+        const { data } = await res.json();
+        parseSharedData(data);
+        return true;
+      }
+    } catch(e) {
+      console.error('Failed to load menu from short URL:', e);
+    }
+    // If API fails, show error
+    showToast('菜单加载失败，请重试');
+    return false;
+  }
+
+  // === Method 2: ?m= parameter (link share / legacy QR) ===
   let compressed = new URLSearchParams(location.search).get('m');
   if (!compressed && location.hash.includes('m=')) {
-    // Some apps may put query params after the hash
     const hashParams = new URLSearchParams(location.hash.split('?')[1] || '');
     compressed = hashParams.get('m');
   }
@@ -3418,48 +3463,7 @@ function tryLoadSharedMenu() {
     const json = LZString.decompressFromEncodedURIComponent(compressed);
     if (!json) { console.error('LZString decompress failed'); return false; }
     const data = JSON.parse(json);
-
-    // Reconstruct menuData from compressed format
-    menuData = {
-      shopName: data.s || '',
-      shopNameCN: data.sc || '',
-      cuisine: data.cu || '',
-      categories: (data.c || []).map(cat => ({
-        name: cat.n,
-        nameCN: cat.nc,
-        items: (cat.i || []).map(item => ({
-          name: item.n,
-          nameCN: item.nc,
-          description: item.d || '',
-          price: item.p || '',
-          priceNum: item.pn || 0,
-          spicy: item.sp || 0,
-          popular: !!item.po,
-          isSet: !!item.is,
-          includes: item.inc || []
-        }))
-      }))
-    };
-
-    // Reconstruct recommendations if present
-    if (data.r) {
-      recommendations = {};
-      ['forOne', 'forTwo', 'forFour'].forEach(key => {
-        if (data.r[key]) {
-          recommendations[key] = data.r[key].map(rec => ({
-            name: rec.n,
-            items: rec.i || [],
-            total: typeof rec.t === 'number' ? rec.t : 0,
-            totalPrice: typeof rec.t === 'string' ? rec.t : (rec.t ? String(rec.t) : ''),
-            reason: rec.re || ''
-          }));
-        } else {
-          recommendations[key] = [];
-        }
-      });
-    }
-
-    isGuestMode = true;
+    parseSharedData(data);
     return true;
   } catch(e) {
     console.error('Failed to load shared menu:', e);
@@ -3513,7 +3517,7 @@ function loadDemoData() {
   switchPage('menu', false);
 }
 
-window.addEventListener('load', () => {
+window.addEventListener('load', async () => {
   // Set currency badge from saved settings
   const s = getSettings();
   safeText('currencyBadge', s.currency + '→¥');
@@ -3522,7 +3526,7 @@ window.addEventListener('load', () => {
   initLocation();
 
   // Check if this is a shared menu URL
-  if (tryLoadSharedMenu()) {
+  if (await tryLoadSharedMenu()) {
     enterGuestMode();
     return;
   }
