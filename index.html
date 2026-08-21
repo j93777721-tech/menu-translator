@@ -1568,34 +1568,76 @@ async function callVisionAPI(prompt, imgs, timeout = 60000) {
 
 // SSE 流解析器：读取流式响应拼装完整文本
 async function readSSEStream(resp) {
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let result = '';
-  let buffer = '';
+  // 兜底：某些移动浏览器不支持 ReadableStream，回退到全量读取
+  if (!resp.body || typeof resp.body.getReader !== 'function') {
+    const fullText = await resp.text();
+    return parseSSEText(fullText);
+  }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || ''; // 保留不完整的最后一行
+  try {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let result = '';
+    let buffer = '';
 
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const data = line.slice(6).trim();
-        if (data === '[DONE]') continue;
-        try {
-          const chunk = JSON.parse(data);
-          const delta = chunk.choices?.[0]?.delta?.content;
-          if (delta) result += delta;
-        } catch (e) {
-          // 跳过解析失败的行
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // 保留不完整的最后一行
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const chunk = JSON.parse(data);
+            const delta = chunk.choices?.[0]?.delta?.content;
+            if (delta) result += delta;
+          } catch (e) {
+            // 跳过解析失败的行
+          }
         }
       }
     }
+    return result;
+  } catch (streamErr) {
+    // ReadableStream 读取失败时，尝试回退
+    console.warn('Stream read failed, trying text fallback:', streamErr.message);
+    try {
+      const fullText = await resp.text();
+      return parseSSEText(fullText);
+    } catch(e) {
+      throw streamErr; // 回退也失败则抛原始错误
+    }
   }
-  return result;
+}
+
+// 从完整 SSE 文本中提取内容（兜底解析）
+function parseSSEText(text) {
+  let result = '';
+  const lines = text.split('\n');
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      const data = line.slice(6).trim();
+      if (data === '[DONE]') continue;
+      try {
+        const chunk = JSON.parse(data);
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (delta) result += delta;
+      } catch(e) {}
+    }
+  }
+  // 如果 SSE 解析没内容，可能是非流式 JSON 响应
+  if (!result && text.trim().startsWith('{')) {
+    try {
+      const json = JSON.parse(text);
+      return json.choices?.[0]?.message?.content || text;
+    } catch(e) {}
+  }
+  return result || text;
 }
 
 async function callTextAPI(prompt) {
@@ -1722,19 +1764,26 @@ function renderMenu() {
   }
 
   const displayName = menuData.shopNameCN || menuData.shopName || '餐厅';
-  document.getElementById('shopName').textContent = displayName;
-  document.getElementById('shopName').onclick = () => editShopName();
-  document.getElementById('shopName').style.cursor = 'pointer';
-  document.getElementById('shopName').title = '点击修改店名';
-  document.getElementById('shopDesc').textContent =
-    `${menuData.shopName || ''} · ${menuData.cuisine || '当地美食'}`;
+  const shopNameEl = document.getElementById('shopName');
+  const shopDescEl = document.getElementById('shopDesc');
+  if (shopNameEl) {
+    shopNameEl.textContent = displayName;
+    shopNameEl.onclick = () => editShopName();
+    shopNameEl.style.cursor = 'pointer';
+    shopNameEl.title = '点击修改店名';
+  }
+  if (shopDescEl) {
+    shopDescEl.textContent = `${menuData.shopName || ''} · ${menuData.cuisine || '当地美食'}`;
+  }
 
   // Category tabs
   const tabsEl = document.getElementById('categoryTabs');
-  tabsEl.innerHTML = `<div class="cat-tab active" onclick="filterCategory(-1)">全部</div>` +
-    menuData.categories.map((cat, i) =>
-      `<div class="cat-tab" onclick="filterCategory(${i})">${cat.nameCN}</div>`
-    ).join('');
+  if (tabsEl) {
+    tabsEl.innerHTML = `<div class="cat-tab active" onclick="filterCategory(-1)">全部</div>` +
+      menuData.categories.map((cat, i) =>
+        `<div class="cat-tab" onclick="filterCategory(${i})">${cat.nameCN}</div>`
+      ).join('');
+  }
 
   renderMenuItems(-1);
 }
@@ -1853,11 +1902,11 @@ function updateOrderBadge() {
   const floatBar = document.getElementById('orderFloatBar');
   const remarks = document.getElementById('remarksSection');
   if (total > 0) {
-    badge.style.display = 'flex';
-    badge.textContent = total;
+    if (badge) { badge.style.display = 'flex'; badge.textContent = total; }
     if (remarks) remarks.style.display = 'block';
     // Update floating bar
-    document.getElementById('floatCount').textContent = total;
+    const floatCount = document.getElementById('floatCount');
+    if (floatCount) floatCount.textContent = total;
     // Calculate total price
     let totalPrice = 0;
     let globalIndex = 0;
@@ -1872,15 +1921,16 @@ function updateOrderBadge() {
       });
     }
     const s = getSettings();
-    document.getElementById('floatPrice').textContent = totalPrice > 0 ? `≈ ${s.currency} ${totalPrice} (¥${toRmb(totalPrice)})` : '';
+    const floatPrice = document.getElementById('floatPrice');
+    if (floatPrice) floatPrice.textContent = totalPrice > 0 ? `≈ ${s.currency} ${totalPrice} (¥${toRmb(totalPrice)})` : '';
     // Show float bar only on menu/recommend pages
-    if (currentPage === 'menu' || currentPage === 'recommend') {
+    if ((currentPage === 'menu' || currentPage === 'recommend') && floatBar) {
       floatBar.classList.add('show');
     }
   } else {
-    badge.style.display = 'none';
+    if (badge) badge.style.display = 'none';
     if (remarks) remarks.style.display = 'none';
-    floatBar.classList.remove('show');
+    if (floatBar) floatBar.classList.remove('show');
   }
 }
 
@@ -2363,17 +2413,22 @@ function restoreSession() {
 }
 
 function showLoading(text) {
-  document.getElementById('loadingText').textContent = text;
-  document.getElementById('loadingOverlay').classList.add('active');
+  const el = document.getElementById('loadingText');
+  const overlay = document.getElementById('loadingOverlay');
+  if (el) el.textContent = text;
+  if (overlay) overlay.classList.add('active');
 }
 function setLoadingText(text) {
-  document.getElementById('loadingText').textContent = text;
+  const el = document.getElementById('loadingText');
+  if (el) el.textContent = text;
 }
 function hideLoading() {
-  document.getElementById('loadingOverlay').classList.remove('active');
+  const overlay = document.getElementById('loadingOverlay');
+  if (overlay) overlay.classList.remove('active');
 }
 function showToast(msg, duration = 2500) {
   const el = document.getElementById('toast');
+  if (!el) { console.warn('Toast:', msg); return; }
   el.textContent = msg;
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), duration);
