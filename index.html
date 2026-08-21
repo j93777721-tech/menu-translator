@@ -1,0 +1,1909 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>菜单翻译助手</title>
+<style>
+:root {
+  --primary: #2E7D32;
+  --primary-light: #E8F5E9;
+  --primary-dark: #1B5E20;
+  --accent: #FF6F00;
+  --bg: #FAFAFA;
+  --card: #FFFFFF;
+  --text: #212121;
+  --text-secondary: #757575;
+  --border: #E0E0E0;
+  --shadow: 0 2px 8px rgba(0,0,0,0.08);
+  --radius: 12px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding-bottom: 130px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Header */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--primary-dark);
+}
+.header .settings-btn {
+  width: 36px; height: 36px;
+  border: none; background: var(--primary-light);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+/* Bottom Nav */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0; right: 0;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  display: flex;
+  padding: 8px 0;
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  z-index: 100;
+}
+.nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 0;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 11px;
+  transition: color 0.2s;
+}
+.nav-item.active { color: var(--primary); }
+.nav-item .nav-icon { font-size: 22px; }
+.nav-item .nav-badge {
+  position: absolute;
+  top: 2px; right: calc(50% - 18px);
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  min-width: 16px; height: 16px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 4px;
+}
+
+/* Pages */
+.page { display: none; padding: 16px; }
+.page.active { display: block; }
+
+/* Camera Page */
+.camera-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 40px 20px;
+  text-align: center;
+  margin-bottom: 16px;
+  transition: border-color 0.2s;
+}
+.camera-zone.has-images { border-color: var(--primary); background: var(--primary-light); }
+.camera-icon { font-size: 48px; margin-bottom: 12px; }
+.camera-zone p { color: var(--text-secondary); font-size: 14px; margin-bottom: 16px; }
+.camera-btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.btn {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:active { background: var(--primary-dark); transform: scale(0.97); }
+.btn-outline { background: var(--card); color: var(--primary); border: 1.5px solid var(--primary); }
+.btn-accent { background: var(--accent); color: #fff; }
+.btn-accent:active { opacity: 0.85; transform: scale(0.97); }
+.btn-block { width: 100%; justify-content: center; }
+.btn:disabled { opacity: 0.5; pointer-events: none; }
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 16px 0;
+}
+.preview-item {
+  position: relative;
+  aspect-ratio: 3/4;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.preview-item img { width: 100%; height: 100%; object-fit: cover; }
+.preview-item .remove-btn {
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  border: none;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* Loading */
+.loading-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(255,255,255,0.92);
+  z-index: 200;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+.loading-overlay.active { display: flex; }
+.spinner {
+  width: 40px; height: 40px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { font-size: 15px; color: var(--text-secondary); }
+
+/* Menu Page */
+.shop-info {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+.shop-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.shop-desc { font-size: 13px; color: var(--text-secondary); }
+
+.category-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0 12px;
+  -webkit-overflow-scrolling: touch;
+}
+.category-tabs::-webkit-scrollbar { display: none; }
+.cat-tab {
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  white-space: nowrap;
+  background: var(--card);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.cat-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+.menu-item {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: background 0.2s;
+}
+.menu-item.selected { background: var(--primary-light); border: 1.5px solid var(--primary); }
+.menu-item-info { flex: 1; }
+.menu-item-name { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+.menu-item-original { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.menu-item-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
+.menu-item-price { font-size: 15px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.menu-item-qty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.qty-btn {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid var(--primary);
+  background: #fff;
+  color: var(--primary);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.qty-btn:active { background: var(--primary-light); }
+.qty-num { font-size: 15px; font-weight: 600; min-width: 20px; text-align: center; }
+
+/* Recommend Page */
+.rec-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 16px;
+  background: var(--card);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.rec-tab {
+  flex: 1;
+  padding: 12px 8px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+  background: transparent;
+}
+.rec-tab.active { background: var(--primary); color: #fff; }
+
+.rec-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+.rec-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.rec-card-title { font-size: 15px; font-weight: 600; }
+.rec-card-price { font-size: 14px; color: var(--accent); font-weight: 600; }
+.rec-card-items { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+.rec-card-reason {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px;
+  color: var(--primary);
+  font-style: italic;
+}
+.rec-use-btn {
+  margin-top: 12px;
+  width: 100%;
+  padding: 10px;
+  background: var(--primary-light);
+  color: var(--primary);
+  border: 1.5px solid var(--primary);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.rec-use-btn:active { background: var(--primary); color: #fff; }
+
+/* Order Page */
+.order-slip {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  font-family: 'Courier New', monospace;
+}
+.order-slip-title {
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  font-family: -apple-system, sans-serif;
+}
+.order-slip-subtitle {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+.order-divider {
+  border: none;
+  border-top: 1px dashed var(--text-secondary);
+  margin: 12px 0;
+}
+.order-table { width: 100%; border-collapse: collapse; }
+.order-table th {
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.order-table td {
+  padding: 8px 0;
+  font-size: 14px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.order-table td:last-child { text-align: right; }
+.order-total {
+  display: flex;
+  justify-content: space-between;
+  font-size: 16px;
+  font-weight: 700;
+  padding-top: 12px;
+}
+.order-note {
+  margin-top: 16px;
+  padding: 12px;
+  background: #FFF8E1;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #F57F17;
+  line-height: 1.5;
+}
+.order-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.order-actions .btn { flex: 1; justify-content: center; }
+
+/* Fixed Order Bar (above bottom nav) */
+.order-float-bar {
+  position: fixed;
+  bottom: 56px; /* height of bottom-nav */
+  left: 0; right: 0;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  padding: 10px 16px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 99;
+  box-shadow: 0 -2px 8px rgba(0,0,0,0.06);
+}
+.order-float-bar.show { display: flex; }
+.order-float-bar .float-info {
+  font-size: 14px;
+  color: var(--text);
+}
+.order-float-bar .float-info .float-count {
+  font-weight: 700;
+  color: var(--primary);
+}
+.order-float-bar .float-info .float-price {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-left: 8px;
+}
+.order-float-bar .float-btn {
+  padding: 10px 20px;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.order-float-bar .float-btn:active { background: var(--primary-dark); transform: scale(0.97); }
+
+/* Order language toggle */
+.order-lang-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1.5px solid var(--primary);
+}
+.order-lang-btn {
+  flex: 1;
+  padding: 8px 12px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  transition: all 0.2s;
+}
+.order-lang-btn.active { background: var(--primary); color: #fff; }
+
+/* Settings Modal */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 300;
+  align-items: flex-end;
+  justify-content: center;
+}
+.modal-overlay.active { display: flex; }
+.modal {
+  background: var(--card);
+  border-radius: 16px 16px 0 0;
+  width: 100%;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 24px 20px;
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+}
+.modal h2 { font-size: 18px; margin-bottom: 20px; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+.form-group input, .form-group select {
+  width: 100%;
+  padding: 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.form-group input:focus, .form-group select:focus { border-color: var(--primary); }
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-secondary);
+}
+.empty-state .empty-icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state p { font-size: 14px; }
+
+/* Toast */
+.toast {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-100%);
+  background: #333;
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  z-index: 500;
+  opacity: 0;
+  transition: all 0.3s;
+}
+.toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+/* Misc */
+.section-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+.tip-box {
+  background: #E3F2FD;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #1565C0;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+.remark-tag {
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-size: 13px;
+  background: var(--card);
+  border: 1.5px solid var(--border);
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+}
+.remark-tag.active {
+  background: var(--primary-light);
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 500;
+}
+input[type="file"] { display: none; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🍽️ 菜单翻译助手</h1>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span id="currencyBadge" style="font-size:12px;background:var(--primary-light);color:var(--primary);padding:4px 8px;border-radius:12px;cursor:pointer;" onclick="openSettings()">PKR→¥</span>
+    <button class="settings-btn" onclick="openSettings()">⚙️</button>
+  </div>
+</div>
+
+<!-- Page: Camera / Upload -->
+<div class="page active" id="page-camera">
+  <div class="tip-box">
+    📍 当前位置：巴基斯坦拉合尔<br>
+    已加载示例菜单供体验，拍摄真实菜单后将自动替换为识别结果
+  </div>
+  <div id="historySection" style="margin-bottom:16px;">
+    <div class="section-title" style="font-size:14px; display:flex; justify-content:space-between; align-items:center;">
+      <span>📋 历史菜单</span>
+      <button onclick="clearHistory()" style="border:none;background:none;color:var(--text-secondary);font-size:12px;cursor:pointer;">清空</button>
+    </div>
+    <div id="historyList" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
+  </div>
+  <div class="camera-zone" id="cameraZone">
+    <div class="camera-icon">📷</div>
+    <p>拍摄或上传菜单照片<br><small>支持多页菜单，逐页拍摄</small></p>
+    <div class="camera-btns">
+      <button class="btn btn-primary" onclick="capturePhoto()">📸 拍照</button>
+      <button class="btn btn-outline" onclick="pickPhoto()">🖼️ 相册</button>
+    </div>
+  </div>
+  <div class="preview-grid" id="previewGrid"></div>
+  <button class="btn btn-accent btn-block" id="startBtn" style="display:none" onclick="startRecognition()">
+    🚀 开始识别翻译
+  </button>
+  <input type="file" id="cameraInput" accept="image/*" capture="environment" multiple onchange="handleFiles(event)">
+  <input type="file" id="galleryInput" accept="image/*" multiple onchange="handleFiles(event)">
+</div>
+
+<!-- Page: Chinese Menu -->
+<div class="page" id="page-menu">
+  <div class="shop-info" id="shopInfo">
+    <div class="shop-name" id="shopName">--</div>
+    <div class="shop-desc" id="shopDesc">--</div>
+  </div>
+  <div class="category-tabs" id="categoryTabs"></div>
+  <div id="menuList"></div>
+  <div style="height:16px"></div>
+  <!-- Remarks Section -->
+  <div id="remarksSection" style="display:none; margin-bottom:12px;">
+    <div class="section-title" style="font-size:14px;">📝 备注（中文写，自动翻英文给服务员）</div>
+    <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+      <span class="remark-tag" onclick="toggleRemark(this)" data-en="Less spicy please">少辣</span>
+      <span class="remark-tag" onclick="toggleRemark(this)" data-en="No spicy">不要辣</span>
+      <span class="remark-tag" onclick="toggleRemark(this)" data-en="No coriander">不要香菜</span>
+      <span class="remark-tag" onclick="toggleRemark(this)" data-en="No onion">不要洋葱</span>
+      <span class="remark-tag" onclick="toggleRemark(this)" data-en="No garlic">不要蒜</span>
+      <span class="remark-tag" onclick="toggleRemark(this)" data-en="Extra sauce on the side">酱料另放</span>
+      <span class="remark-tag" onclick="toggleRemark(this)" data-en="Well done / Extra cooked">多烤一会</span>
+      <span class="remark-tag" onclick="toggleRemark(this)" data-en="For takeaway / To go">打包带走</span>
+      <span class="remark-tag" onclick="toggleRemark(this)" data-en="No ice">不加冰</span>
+      <span class="remark-tag" onclick="toggleRemark(this)" data-en="Extra napkins please">多要纸巾</span>
+    </div>
+    <textarea id="customRemark" placeholder="其他备注（中文）…如：鸡肉要去骨、饮料少糖" 
+      style="width:100%; padding:10px; border:1.5px solid var(--border); border-radius:8px; font-size:14px; resize:none; height:60px; outline:none;"></textarea>
+  </div>
+</div>
+
+<!-- Page: Recommendations -->
+<div class="page" id="page-recommend">
+  <div class="section-title">AI 推荐点餐</div>
+  <div class="rec-tabs">
+    <button class="rec-tab active" onclick="switchRec(1)">🧑 一人餐</button>
+    <button class="rec-tab" onclick="switchRec(2)">👫 二人餐</button>
+    <button class="rec-tab" onclick="switchRec(4)">👨‍👩‍👧‍👦 四人餐</button>
+  </div>
+  <div id="recContent">
+    <div class="empty-state">
+      <div class="empty-icon">🤖</div>
+      <p>请先拍摄菜单<br>AI 将为你推荐搭配</p>
+    </div>
+  </div>
+</div>
+
+<!-- Page: Order Slip -->
+<div class="page" id="page-order">
+  <div id="orderContent">
+    <div class="empty-state">
+      <div class="empty-icon">📋</div>
+      <p>在菜单中选择菜品<br>或使用推荐方案后生成订单</p>
+    </div>
+  </div>
+</div>
+
+<!-- Floating Order Bar -->
+<div class="order-float-bar" id="orderFloatBar">
+  <div class="float-info">
+    <span>已选 <span class="float-count" id="floatCount">0</span> 件</span>
+    <span class="float-price" id="floatPrice"></span>
+  </div>
+  <button class="float-btn" onclick="goToOrder()">生成订单 →</button>
+</div>
+
+<!-- Bottom Navigation -->
+<div class="bottom-nav">
+  <div class="nav-item active" onclick="switchPage('camera')">
+    <span class="nav-icon">📷</span>
+    <span>拍菜单</span>
+  </div>
+  <div class="nav-item" onclick="switchPage('menu')">
+    <span class="nav-icon">📖</span>
+    <span>中文菜单</span>
+  </div>
+  <div class="nav-item" onclick="switchPage('recommend')">
+    <span class="nav-icon">⭐</span>
+    <span>推荐</span>
+  </div>
+  <div class="nav-item" onclick="switchPage('order')" style="position:relative">
+    <span class="nav-icon">📋</span>
+    <span>订单</span>
+    <span class="nav-badge" id="orderBadge" style="display:none">0</span>
+  </div>
+</div>
+
+<!-- Loading Overlay -->
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">正在识别菜单...</div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <h2>⚙️ API 设置</h2>
+    <div class="form-group">
+      <label>服务商</label>
+      <select id="apiProvider" onchange="onProviderChange()">
+        <option value="openai">OpenAI (GPT-4o)</option>
+        <option value="custom">自定义 OpenAI 兼容接口</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>API Endpoint</label>
+      <input type="url" id="apiEndpoint" placeholder="https://api.openai.com/v1/chat/completions">
+    </div>
+    <div class="form-group">
+      <label>API Key</label>
+      <input type="password" id="apiKey" placeholder="sk-...">
+    </div>
+    <div class="form-group">
+      <label>文本模型（推荐生成）</label>
+      <input type="text" id="apiModel" placeholder="qwen-plus">
+    </div>
+    <div class="form-group">
+      <label>视觉模型（图片识别）</label>
+      <input type="text" id="apiVisionModel" placeholder="qwen-vl-max">
+    </div>
+    <div class="form-group">
+      <label>当前币种</label>
+      <select id="settingCurrency" onchange="onCurrencyChange()">
+        <option value="PKR">PKR (巴基斯坦卢比)</option>
+        <option value="INR">INR (印度卢比)</option>
+        <option value="AED">AED (迪拉姆)</option>
+        <option value="USD">USD (美元)</option>
+        <option value="EUR">EUR (欧元)</option>
+        <option value="THB">THB (泰铢)</option>
+        <option value="JPY">JPY (日元)</option>
+        <option value="KRW">KRW (韩元)</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>兑人民币汇率</label>
+      <input type="number" id="settingExchangeRate" placeholder="如39=39卢比兑1元" step="0.01">
+    </div>
+    <div style="display:flex; gap:10px; margin-top:20px;">
+      <button class="btn btn-outline" style="flex:1" onclick="closeSettings()">取消</button>
+      <button class="btn btn-primary" style="flex:1" onclick="saveSettings()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// === State ===
+let images = []; // base64 images
+let menuData = null; // parsed menu
+let recommendations = null; // AI recommendations
+let selectedItems = {}; // {index: qty}
+let currentRecType = 1;
+
+// === Settings ===
+const DEFAULT_SETTINGS = {
+  provider: 'custom',
+  endpoint: 'https://idealab.alibaba-inc.com/api/openai/v1/chat/completions',
+  key: '743377df8e76d2cd3536362556e09567',
+  model: 'qwen-plus',
+  visionModel: 'qwen-vl-max',
+  currency: 'PKR',
+  exchangeRate: 39
+};
+
+function getSettings() {
+  const saved = localStorage.getItem('menuToolSettings');
+  if (saved) {
+    const s = JSON.parse(saved);
+    if (!s.visionModel) s.visionModel = s.model;
+    if (!s.currency) s.currency = DEFAULT_SETTINGS.currency;
+    if (!s.exchangeRate) s.exchangeRate = DEFAULT_SETTINGS.exchangeRate;
+    return s;
+  }
+  return { ...DEFAULT_SETTINGS };
+}
+
+function openSettings() {
+  const s = getSettings();
+  document.getElementById('apiProvider').value = s.provider;
+  document.getElementById('apiEndpoint').value = s.endpoint;
+  document.getElementById('apiKey').value = s.key;
+  document.getElementById('apiModel').value = s.model;
+  document.getElementById('apiVisionModel').value = s.visionModel || s.model;
+  document.getElementById('settingCurrency').value = s.currency || 'PKR';
+  document.getElementById('settingExchangeRate').value = s.exchangeRate || 39;
+  document.getElementById('settingsModal').classList.add('active');
+}
+
+function closeSettings() {
+  document.getElementById('settingsModal').classList.remove('active');
+}
+
+function saveSettings() {
+  const settings = {
+    provider: document.getElementById('apiProvider').value,
+    endpoint: document.getElementById('apiEndpoint').value,
+    key: document.getElementById('apiKey').value,
+    model: document.getElementById('apiModel').value,
+    visionModel: document.getElementById('apiVisionModel').value,
+    currency: document.getElementById('settingCurrency').value,
+    exchangeRate: parseFloat(document.getElementById('settingExchangeRate').value) || 39
+  };
+  localStorage.setItem('menuToolSettings', JSON.stringify(settings));
+  document.getElementById('currencyBadge').textContent = settings.currency + '→¥';
+  closeSettings();
+  showToast('设置已保存');
+}
+
+function onProviderChange() {
+  const p = document.getElementById('apiProvider').value;
+  const ep = document.getElementById('apiEndpoint');
+  const model = document.getElementById('apiModel');
+  if (p === 'openai') {
+    ep.value = 'https://api.openai.com/v1/chat/completions';
+    model.value = 'gpt-4o';
+  } else {
+    ep.value = '';
+    model.value = '';
+    ep.placeholder = 'https://your-api.com/v1/chat/completions';
+    model.placeholder = 'model-name';
+  }
+}
+
+function onCurrencyChange() {
+  const currency = document.getElementById('settingCurrency').value;
+  const rateMap = { PKR: 39, INR: 12, AED: 2.5, USD: 0.14, EUR: 0.13, THB: 5, JPY: 22, KRW: 190 };
+  if (rateMap[currency] !== undefined) {
+    document.getElementById('settingExchangeRate').value = rateMap[currency];
+  }
+}
+
+// === Navigation with Back Button Support ===
+let currentPage = 'camera';
+function switchPage(name, pushState = true) {
+  if (name === currentPage) return;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach((n, i) => {
+    n.classList.toggle('active', n.getAttribute('onclick')?.includes(name));
+  });
+  if (pushState && name !== currentPage) {
+    history.pushState({ page: name }, '', '#' + name);
+  }
+  currentPage = name;
+  // Toggle floating order bar visibility based on page
+  const floatBar = document.getElementById('orderFloatBar');
+  const total = Object.values(selectedItems).reduce((a, b) => a + b, 0);
+  if ((name === 'menu' || name === 'recommend') && total > 0) {
+    floatBar.classList.add('show');
+  } else {
+    floatBar.classList.remove('show');
+  }
+}
+
+window.addEventListener('popstate', (e) => {
+  // If fullscreen overlay is open, close it
+  const overlay = document.querySelector('[data-fullscreen-overlay]');
+  if (overlay) { overlay.remove(); return; }
+  // If settings modal is open, close it
+  const modal = document.getElementById('settingsModal');
+  if (modal && modal.classList.contains('active')) { closeSettings(); return; }
+  // Navigate to page from state
+  if (e.state && e.state.page) {
+    switchPage(e.state.page, false);
+  } else {
+    switchPage('camera', false);
+  }
+});
+
+// Initialize state
+history.replaceState({ page: 'camera' }, '', '#camera');
+
+// === Camera / Upload ===
+function capturePhoto() { document.getElementById('cameraInput').click(); }
+function pickPhoto() { document.getElementById('galleryInput').click(); }
+
+function handleFiles(e) {
+  const files = Array.from(e.target.files);
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      images.push(reader.result);
+      renderPreviews();
+    };
+    reader.readAsDataURL(file);
+  });
+  e.target.value = '';
+}
+
+function renderPreviews() {
+  const grid = document.getElementById('previewGrid');
+  grid.innerHTML = images.map((img, i) => `
+    <div class="preview-item">
+      <img src="${img}" alt="菜单第${i+1}页">
+      <button class="remove-btn" onclick="removeImage(${i})">×</button>
+    </div>
+  `).join('');
+  const zone = document.getElementById('cameraZone');
+  const btn = document.getElementById('startBtn');
+  if (images.length > 0) {
+    zone.classList.add('has-images');
+    btn.style.display = 'block';
+  } else {
+    zone.classList.remove('has-images');
+    btn.style.display = 'none';
+  }
+}
+
+function removeImage(i) {
+  images.splice(i, 1);
+  renderPreviews();
+}
+
+// Compress image to max 800px width, JPEG quality 0.5, with size limit
+function compressImage(dataUrl, maxWidth = 800, quality = 0.5) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let w = img.width, h = img.height;
+      if (w > maxWidth) { h = h * maxWidth / w; w = maxWidth; }
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      let result = canvas.toDataURL('image/jpeg', quality);
+      // If still over 200KB, reduce quality further
+      const sizeKB = (result.length * 0.75) / 1024;
+      if (sizeKB > 200) {
+        result = canvas.toDataURL('image/jpeg', 0.3);
+      }
+      resolve(result);
+    };
+    img.src = dataUrl;
+  });
+}
+
+// === Retry Helper ===
+async function withRetry(fn, retries = 1) {
+  for (let i = 0; i <= retries; i++) {
+    try { return await fn(); } 
+    catch(e) { 
+      if (i === retries) throw e;
+      setLoadingText('识别失败，正在重试...');
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+}
+
+// === AI Recognition ===
+async function startRecognition() {
+  const settings = getSettings();
+  if (!settings.key) {
+    openSettings();
+    showToast('请先配置 API Key');
+    return;
+  }
+  if (images.length === 0) {
+    showToast('请先拍摄菜单');
+    return;
+  }
+
+  showLoading('正在压缩图片...');
+
+  try {
+    // Compress images first
+    const compressed = await Promise.all(images.map(img => compressImage(img)));
+    const totalSizeKB = compressed.reduce((s, img) => s + (img.length * 0.75 / 1024), 0).toFixed(0);
+    setLoadingText(`图片已压缩(${totalSizeKB}KB)，正在识别菜单...`);
+    
+    // Step 1: Recognize menu with retry
+    setLoadingText('正在识别菜单（可能需要15-30秒）...');
+    const menuResult = await withRetry(async () => {
+      return await callVisionAPI(buildMenuPrompt(), compressed);
+    }, 1);
+    menuData = parseMenuJSON(menuResult);
+    renderMenu();
+    saveSession(); // persist
+
+    // Step 2: Generate recommendations with retry
+    setLoadingText('正在生成推荐搭配...');
+    const recResult = await withRetry(async () => {
+      return await callTextAPI(buildRecPrompt(menuData));
+    }, 1);
+    recommendations = parseRecJSON(recResult);
+    renderRecommendations();
+    saveSession(); // persist
+
+    hideLoading();
+    saveToHistory();
+    switchPage('menu');
+    showToast('识别完成！');
+  } catch (err) {
+    hideLoading();
+    const msg = err.message.includes('JSON') ? 
+      '识别结果格式异常，请重试' : '识别失败: ' + err.message;
+    showToast(msg);
+    console.error(err);
+  }
+}
+
+function buildMenuPrompt() {
+  return `你是一个专业的菜单翻译助手。我在巴基斯坦拉合尔的一家餐厅，请帮我识别这份菜单。
+
+请输出严格的 JSON 格式（不要包含 markdown 代码块标记），结构如下：
+{
+  "shopName": "店铺名称（如果能识别到的话）",
+  "shopNameCN": "店铺名称中文翻译",
+  "cuisine": "菜系类型（如巴基斯坦菜、烧烤、中餐等）",
+  "categories": [
+    {
+      "name": "分类名（英文/乌尔都语原文）",
+      "nameCN": "分类中文名",
+      "items": [
+        {
+          "name": "菜品原名",
+          "nameCN": "中文翻译",
+          "description": "简短中文描述（食材、口味、做法）",
+          "price": "价格（保留原始货币）",
+          "priceNum": 数字价格,
+          "spicy": 0-3,
+          "popular": true/false
+        }
+      ]
+    }
+  ]
+}
+
+要求：
+1. 准确翻译每道菜的名称为中文
+2. 用通俗易懂的中文描述菜品的做法和口味
+3. 标注辣度（0=不辣, 1=微辣, 2=中辣, 3=很辣）
+4. 如果菜品看起来是热门/招牌菜，标注 popular=true
+5. 价格保持原始格式（巴基斯坦卢比 Rs/PKR）
+6. 如果无法确定币种请在shopName旁标注你猜测的币种`;
+}
+
+function buildRecPrompt(menu) {
+  return `基于以下餐厅菜单，为中国游客推荐点餐方案。餐厅位于巴基斯坦拉合尔。
+
+菜单数据：
+${JSON.stringify(menu, null, 2)}
+
+请为以下三种场景各推荐 2-3 个方案，输出严格 JSON（不要代码块标记）：
+{
+  "forOne": [
+    {
+      "name": "方案名称（如：经典烤肉套餐）",
+      "items": ["菜品中文名 x数量", ...],
+      "totalPrice": "总价",
+      "reason": "推荐理由（一句话，要有趣味性）"
+    }
+  ],
+  "forTwo": [...],
+  "forFour": [...]
+}
+
+推荐原则：
+1. 荤素搭配，考虑中国人口味
+2. 一人餐预算约 500-1000 PKR，二人 1000-2000，四人 2000-4000
+3. 优先推荐招牌菜和适合中国游客的菜品
+4. 避免过辣的菜（除非标注"微辣版"）
+5. 方案名称要生动有趣
+6. 每个方案都要有主食+菜+饮品的搭配`;
+}
+
+async function callVisionAPI(prompt, imgs) {
+  const settings = getSettings();
+  const content = [{ type: 'text', text: prompt }];
+  imgs.forEach(img => {
+    content.push({
+      type: 'image_url',
+      image_url: { url: img, detail: 'high' }
+    });
+  });
+
+  const resp = await fetchWithTimeout(settings.endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${settings.key}`
+    },
+    body: JSON.stringify({
+      model: settings.visionModel || settings.model,
+      messages: [{ role: 'user', content }],
+      max_tokens: 4096,
+      temperature: 0.3
+    })
+  }, 60000); // 60s timeout for vision
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`API 错误 ${resp.status}: ${err.substring(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  return data.choices[0].message.content;
+}
+
+async function callTextAPI(prompt) {
+  const settings = getSettings();
+  const resp = await fetchWithTimeout(settings.endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${settings.key}`
+    },
+    body: JSON.stringify({
+      model: settings.model,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 2048,
+      temperature: 0.7
+    })
+  }, 60000);
+
+  if (!resp.ok) throw new Error(`API 错误 ${resp.status}`);
+  const data = await resp.json();
+  return data.choices[0].message.content;
+}
+
+function parseMenuJSON(text) {
+  text = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+  // Extract JSON object from potentially messy output
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1) throw new Error('JSON parse: no object found');
+  return JSON.parse(text.substring(start, end + 1));
+}
+
+function parseRecJSON(text) {
+  text = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1) throw new Error('JSON parse: no object found');
+  return JSON.parse(text.substring(start, end + 1));
+}
+
+// === Render Menu ===
+function renderMenu() {
+  if (!menuData) return;
+
+  document.getElementById('shopName').textContent = menuData.shopNameCN || menuData.shopName || '餐厅';
+  document.getElementById('shopDesc').textContent =
+    `${menuData.shopName || ''} · ${menuData.cuisine || '当地美食'}`;
+
+  // Category tabs
+  const tabsEl = document.getElementById('categoryTabs');
+  tabsEl.innerHTML = `<div class="cat-tab active" onclick="filterCategory(-1)">全部</div>` +
+    menuData.categories.map((cat, i) =>
+      `<div class="cat-tab" onclick="filterCategory(${i})">${cat.nameCN}</div>`
+    ).join('');
+
+  renderMenuItems(-1);
+}
+
+function filterCategory(catIndex) {
+  document.querySelectorAll('.cat-tab').forEach((t, i) => {
+    t.classList.toggle('active', i === catIndex + 1);
+  });
+  renderMenuItems(catIndex);
+}
+
+function renderMenuItems(catIndex) {
+  const list = document.getElementById('menuList');
+  let items = [];
+  let globalIndex = 0;
+  const s = getSettings();
+  const currencyLabel = s.currency + '→¥';
+
+  menuData.categories.forEach((cat, ci) => {
+    cat.items.forEach((item, ii) => {
+      if (catIndex === -1 || catIndex === ci) {
+        items.push({ ...item, catName: cat.nameCN, globalIndex });
+      }
+      globalIndex++;
+    });
+  });
+
+  list.innerHTML = items.map(item => {
+    const qty = selectedItems[item.globalIndex] || 0;
+    const spicyStr = item.spicy > 0 ? ' 🌶️'.repeat(item.spicy) : '';
+    const popularStr = item.popular ? ' 🔥' : '';
+    return `
+      <div class="menu-item ${qty > 0 ? 'selected' : ''}" id="menuItem${item.globalIndex}">
+        <div class="menu-item-info">
+          <div class="menu-item-name">${item.nameCN}${spicyStr}${popularStr}</div>
+          <div class="menu-item-original">${item.name}</div>
+          <div class="menu-item-desc">${item.description || ''}</div>
+          <div class="menu-item-qty">
+            ${qty > 0 ? `
+              <button class="qty-btn" onclick="changeQty(${item.globalIndex}, -1)">−</button>
+              <span class="qty-num">${qty}</span>
+            ` : ''}
+            <button class="qty-btn" onclick="changeQty(${item.globalIndex}, 1)">+</button>
+          </div>
+        </div>
+        <div class="menu-item-price">
+          ${item.price || ''}
+          ${item.priceNum ? `<div style="font-size:11px;color:#888;margin-top:2px;">≈¥${toRmb(item.priceNum)}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  updateOrderBadge();
+}
+
+function changeQty(index, delta) {
+  const current = selectedItems[index] || 0;
+  const newQty = Math.max(0, current + delta);
+  if (newQty === 0) delete selectedItems[index];
+  else selectedItems[index] = newQty;
+  renderMenuItems(getCurrentCatIndex());
+  updateOrderBadge();
+}
+
+function getCurrentCatIndex() {
+  const tabs = document.querySelectorAll('.cat-tab');
+  for (let i = 0; i < tabs.length; i++) {
+    if (tabs[i].classList.contains('active')) return i - 1;
+  }
+  return -1;
+}
+
+function updateOrderBadge() {
+  const total = Object.values(selectedItems).reduce((a, b) => a + b, 0);
+  const badge = document.getElementById('orderBadge');
+  const floatBar = document.getElementById('orderFloatBar');
+  const remarks = document.getElementById('remarksSection');
+  if (total > 0) {
+    badge.style.display = 'flex';
+    badge.textContent = total;
+    if (remarks) remarks.style.display = 'block';
+    // Update floating bar
+    document.getElementById('floatCount').textContent = total;
+    // Calculate total price
+    let totalPrice = 0;
+    let globalIndex = 0;
+    if (menuData) {
+      menuData.categories.forEach(cat => {
+        cat.items.forEach(item => {
+          if (selectedItems[globalIndex]) {
+            totalPrice += (item.priceNum || 0) * selectedItems[globalIndex];
+          }
+          globalIndex++;
+        });
+      });
+    }
+    const s = getSettings();
+    document.getElementById('floatPrice').textContent = totalPrice > 0 ? `≈ ${s.currency} ${totalPrice} (¥${toRmb(totalPrice)})` : '';
+    // Show float bar only on menu/recommend pages
+    if (currentPage === 'menu' || currentPage === 'recommend') {
+      floatBar.classList.add('show');
+    }
+  } else {
+    badge.style.display = 'none';
+    if (remarks) remarks.style.display = 'none';
+    floatBar.classList.remove('show');
+  }
+}
+
+// === Render Recommendations ===
+function renderRecommendations() {
+  if (!recommendations) return;
+  switchRec(currentRecType);
+}
+
+function switchRec(type) {
+  currentRecType = type;
+  document.querySelectorAll('.rec-tab').forEach((t, i) => {
+    t.classList.toggle('active', [1,2,4][i] === type);
+  });
+
+  const key = type === 1 ? 'forOne' : type === 2 ? 'forTwo' : 'forFour';
+  const recs = recommendations[key] || [];
+
+  const el = document.getElementById('recContent');
+  if (recs.length === 0) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-icon">🤷</div><p>暂无推荐</p></div>';
+    return;
+  }
+
+  el.innerHTML = recs.map((rec, i) => `
+    <div class="rec-card">
+      <div class="rec-card-header">
+        <div class="rec-card-title">${rec.name}</div>
+        <div class="rec-card-price">${rec.totalPrice || ''}</div>
+      </div>
+      <div class="rec-card-items">${rec.items.join('<br>')}</div>
+      <div class="rec-card-reason">💡 ${rec.reason}</div>
+      <button class="rec-use-btn" onclick="useRecommendation('${key}', ${i})">
+        📝 使用此方案下单
+      </button>
+    </div>
+  `).join('');
+}
+
+function useRecommendation(key, index) {
+  const rec = recommendations[key][index];
+  // Clear current selection and set recommendation items
+  selectedItems = {};
+  // Try to match recommendation items to menu items
+  let globalIndex = 0;
+  menuData.categories.forEach(cat => {
+    cat.items.forEach(item => {
+      rec.items.forEach(recItem => {
+        // Match by Chinese name (may include quantity)
+        const match = recItem.match(/(.+?)\s*[xX×]\s*(\d+)/);
+        const name = match ? match[1].trim() : recItem.trim();
+        const qty = match ? parseInt(match[2]) : 1;
+        if (item.nameCN.includes(name) || name.includes(item.nameCN)) {
+          selectedItems[globalIndex] = (selectedItems[globalIndex] || 0) + qty;
+        }
+      });
+      globalIndex++;
+    });
+  });
+
+  // If no matches found, just generate order from rec items text
+  if (Object.keys(selectedItems).length === 0) {
+    generateOrderFromRec(rec);
+  } else {
+    updateOrderBadge();
+    goToOrder();
+  }
+  showToast('已选用推荐方案');
+}
+
+// === Remarks ===
+function toggleRemark(el) {
+  el.classList.toggle('active');
+}
+
+function getRemarks() {
+  // Collect active preset tags
+  const tags = document.querySelectorAll('.remark-tag.active');
+  const presetCN = [];
+  const presetEN = [];
+  tags.forEach(tag => {
+    presetCN.push(tag.textContent.trim());
+    presetEN.push(tag.getAttribute('data-en'));
+  });
+
+  // Custom text
+  const custom = (document.getElementById('customRemark')?.value || '').trim();
+
+  return { presetCN, presetEN, custom };
+}
+
+// Common CN→EN remark dictionary for offline translation
+const REMARK_DICT = {
+  '去骨': 'Boneless please',
+  '少糖': 'Less sugar',
+  '不要糖': 'No sugar',
+  '加辣': 'Extra spicy',
+  '微辣': 'Mild spicy',
+  '少盐': 'Less salt',
+  '不要味精': 'No MSG',
+  '多放酱': 'Extra sauce',
+  '单独包装': 'Pack separately',
+  '快一点': 'Rush order please',
+  '不要生菜': 'No lettuce',
+  '加芝士': 'Extra cheese',
+  '半份': 'Half portion',
+  '加大份': 'Large portion',
+  '常温': 'Room temperature',
+  '加热': 'Heat it up please',
+  '分开装': 'Separate containers'
+};
+
+function translateCustomRemark(cn) {
+  if (!cn) return '';
+  // Try dictionary match first
+  for (const [key, val] of Object.entries(REMARK_DICT)) {
+    if (cn.includes(key)) {
+      cn = cn.replace(key, val);
+    }
+  }
+  // If still has Chinese chars, wrap with note
+  if (/[\u4e00-\u9fff]/.test(cn)) {
+    return `[Note: ${cn}]`;
+  }
+  return cn;
+}
+
+// === Order Generation ===
+let orderLang = 'en'; // 'en' or 'local'
+
+// Detect the menu's local language from item names
+function detectMenuLang() {
+  if (!menuData) return { code: 'ur', label: 'اردو (乌尔都语)' };
+  let text = '';
+  menuData.categories.forEach(cat => {
+    text += cat.name + ' ';
+    cat.items.forEach(item => { text += item.name + ' '; });
+  });
+  // Check for script patterns
+  if (/[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text)) return { code: 'ur', label: 'اردو (乌尔都语)' };
+  if (/[\u0E00-\u0E7F]/.test(text)) return { code: 'th', label: 'ไทย (泰语)' };
+  if (/[\u3040-\u309F\u30A0-\u30FF]/.test(text)) return { code: 'ja', label: '日本語 (日语)' };
+  if (/[\uAC00-\uD7AF]/.test(text)) return { code: 'ko', label: '한국어 (韩语)' };
+  if (/[\u0900-\u097F]/.test(text)) return { code: 'hi', label: 'हिन्दी (印地语)' };
+  if (/[\u0980-\u09FF]/.test(text)) return { code: 'bn', label: 'বাংলা (孟加拉语)' };
+  // Default: assume English menu → show original names directly
+  return { code: 'en', label: 'English' };
+}
+
+function switchOrderLang(lang) {
+  orderLang = lang;
+  // Re-render the order slip with new language
+  if (Object.keys(selectedItems).length > 0) {
+    generateOrderSlip();
+  }
+}
+
+function goToOrder() {
+  generateOrderSlip();
+  switchPage('order');
+}
+
+function getSelectedItemsList() {
+  const items = [];
+  let globalIndex = 0;
+  menuData.categories.forEach(cat => {
+    cat.items.forEach(item => {
+      if (selectedItems[globalIndex]) {
+        items.push({
+          ...item,
+          qty: selectedItems[globalIndex]
+        });
+      }
+      globalIndex++;
+    });
+  });
+  return items;
+}
+
+function generateOrderSlip() {
+  const items = getSelectedItemsList();
+  if (items.length === 0) return;
+
+  const totalPrice = items.reduce((sum, item) => sum + (item.priceNum || 0) * item.qty, 0);
+  const remarks = getRemarks();
+
+  // Build remarks display
+  const remarksCN = [...remarks.presetCN];
+  if (remarks.custom) remarksCN.push(remarks.custom);
+  const remarksEN = [...remarks.presetEN];
+  if (remarks.custom) remarksEN.push(translateCustomRemark(remarks.custom));
+
+  const hasRemarks = remarksCN.length > 0;
+  const remarksCNStr = remarksCN.join('、');
+  const remarksENStr = remarksEN.join('; ');
+
+  const s = getSettings();
+  const localLang = detectMenuLang();
+  const isLocalLangEnglish = localLang.code === 'en';
+
+  // Determine what name to show in the waiter's order
+  const getOrderName = (item) => {
+    if (orderLang === 'local' && !isLocalLangEnglish) {
+      // Use original name from menu (which is in local language)
+      return item.name;
+    }
+    // Default: English - item.name is usually already in English/romanized
+    return item.name;
+  };
+
+  // Order slip header text based on language
+  const slipTitle = orderLang === 'local' && !isLocalLangEnglish ? 'ORDER / آرڈر' : 'ORDER';
+  const slipItemHeader = orderLang === 'local' && !isLocalLangEnglish ? 'Item / آئٹم' : 'Item';
+  const slipSpecialReq = orderLang === 'local' && !isLocalLangEnglish ? '⚠️ Special Request / خاص درخواست:' : '⚠️ Special Request:';
+
+  const el = document.getElementById('orderContent');
+  el.innerHTML = `
+    <div class="section-title" style="margin-bottom:8px">📖 我的中文菜单</div>
+    <div style="background:#f5f5f5;border-radius:8px;padding:12px;margin-bottom:20px;font-size:13px;">
+      ${items.map(item => `
+        <div style="display:flex;justify-content:space-between;padding:4px 0;">
+          <span>${item.nameCN} × ${item.qty}</span>
+          <span>${item.price || ''}</span>
+        </div>
+      `).join('')}
+      <div style="border-top:1px dashed #ccc;margin-top:8px;padding-top:8px;font-weight:600;display:flex;justify-content:space-between;">
+        <span>合计</span>
+        <span>${s.currency} ${totalPrice} <span style="font-weight:400;color:#888;font-size:12px;">≈¥${toRmb(totalPrice)}</span></span>
+      </div>
+    </div>
+
+    <div class="section-title" style="margin-bottom:8px">🧾 给服务员的订单</div>
+    ${!isLocalLangEnglish ? `
+    <div class="order-lang-toggle">
+      <button class="order-lang-btn ${orderLang === 'en' ? 'active' : ''}" onclick="switchOrderLang('en')">English</button>
+      <button class="order-lang-btn ${orderLang === 'local' ? 'active' : ''}" onclick="switchOrderLang('local')">${localLang.label}</button>
+    </div>
+    ` : ''}
+    <div class="order-slip">
+      <div class="order-slip-title">${slipTitle}</div>
+      <div class="order-slip-subtitle">${menuData.shopName || 'Restaurant'}</div>
+      <hr class="order-divider">
+      <table class="order-table">
+        <thead>
+          <tr><th>${slipItemHeader}</th><th>Qty</th><th style="text-align:right">Price</th></tr>
+        </thead>
+        <tbody>
+          ${items.map(item => `
+            <tr>
+              <td>${getOrderName(item)}</td>
+              <td>${item.qty}</td>
+              <td style="text-align:right">${item.price || ''}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      ${hasRemarks ? `
+      <hr class="order-divider">
+      <div style="padding:8px 0;font-size:14px;">
+        <strong>${slipSpecialReq}</strong><br>
+        <span style="font-size:15px;">${remarksENStr}</span>
+      </div>
+      ` : ''}
+      <hr class="order-divider">
+      <div class="order-total">
+        <span>Total</span>
+        <span>${s.currency} ${totalPrice}</span>
+      </div>
+    </div>
+
+    <div class="order-note">
+      💡 把手机递给服务员看上面的订单即可
+    </div>
+
+    <div class="order-actions">
+      <button class="btn btn-outline" onclick="switchPage('menu')">✏️ 改单</button>
+      <button class="btn btn-primary" onclick="fullscreenOrder()">📱 全屏展示</button>
+    </div>
+    <button class="btn btn-accent btn-block" style="margin-top:12px;" onclick="submitOrder()">
+      ✅ 确认下单（存入历史并清空）
+    </button>
+  `;
+}
+
+function generateOrderFromRec(rec) {
+  const remarks = getRemarks();
+  const remarksCN = [...remarks.presetCN];
+  if (remarks.custom) remarksCN.push(remarks.custom);
+  const remarksEN = [...remarks.presetEN];
+  if (remarks.custom) remarksEN.push(translateCustomRemark(remarks.custom));
+  const hasRemarks = remarksCN.length > 0;
+  const remarksCNStr = remarksCN.join('、');
+  const remarksENStr = remarksEN.join('; ');
+
+  const localLang = detectMenuLang();
+  const isLocalLangEnglish = localLang.code === 'en';
+  const slipTitle = orderLang === 'local' && !isLocalLangEnglish ? 'ORDER / آرڈر' : 'ORDER';
+  const slipSpecialReq = orderLang === 'local' && !isLocalLangEnglish ? '⚠️ Special Request / خاص درخواست:' : '⚠️ Special Request:';
+
+  const el = document.getElementById('orderContent');
+  el.innerHTML = `
+    <div class="section-title" style="margin-bottom:8px">📖 推荐方案：${rec.name}</div>
+    <div style="background:#f5f5f5;border-radius:8px;padding:12px;margin-bottom:20px;font-size:13px;">
+      ${rec.items.map(item => `<div style="padding:3px 0;">${item}</div>`).join('')}
+      <div style="border-top:1px dashed #ccc;margin-top:8px;padding-top:8px;font-weight:600;">
+        预估总价：${rec.totalPrice || ''}
+      </div>
+      ${hasRemarks ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #ccc;color:#666;">📝 备注：${remarksCNStr}</div>` : ''}
+    </div>
+
+    <div class="section-title" style="margin-bottom:8px">🧾 给服务员的订单</div>
+    ${!isLocalLangEnglish ? `
+    <div class="order-lang-toggle">
+      <button class="order-lang-btn ${orderLang === 'en' ? 'active' : ''}" onclick="switchOrderLang('en')">English</button>
+      <button class="order-lang-btn ${orderLang === 'local' ? 'active' : ''}" onclick="switchOrderLang('local')">${localLang.label}</button>
+    </div>
+    ` : ''}
+    <div class="order-slip">
+      <div class="order-slip-title">${slipTitle}</div>
+      <div class="order-slip-subtitle">${menuData?.shopName || 'Restaurant'}</div>
+      <hr class="order-divider">
+      <table class="order-table">
+        <thead>
+          <tr><th>Item</th><th style="text-align:right">Qty</th></tr>
+        </thead>
+        <tbody>
+          ${rec.items.map(item => {
+            const match = item.match(/(.+?)\s*[xX×]\s*(\d+)/);
+            const name = match ? match[1].trim() : item;
+            const qty = match ? match[2] : '1';
+            let engName = name;
+            if (menuData) {
+              menuData.categories.forEach(cat => {
+                cat.items.forEach(mi => {
+                  if (mi.nameCN.includes(name) || name.includes(mi.nameCN)) {
+                    engName = (orderLang === 'local' && !isLocalLangEnglish) ? mi.name : mi.name;
+                  }
+                });
+              });
+            }
+            return `<tr><td>${engName}</td><td style="text-align:right">${qty}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      ${hasRemarks ? `
+      <hr class="order-divider">
+      <div style="padding:8px 0;font-size:14px;">
+        <strong>${slipSpecialReq}</strong><br>
+        <span style="font-size:15px;">${remarksENStr}</span>
+      </div>
+      ` : ''}
+      <hr class="order-divider">
+      <div class="order-total">
+        <span>Estimated Total</span>
+        <span>${rec.totalPrice || ''}</span>
+      </div>
+    </div>
+
+    <div class="order-note">
+      💡 把手机递给服务员看上面的订单即可
+    </div>
+
+    <div class="order-actions">
+      <button class="btn btn-outline" onclick="switchPage('menu')">✏️ 自己选菜</button>
+      <button class="btn btn-primary" onclick="fullscreenOrder()">📱 全屏展示</button>
+    </div>
+    <button class="btn btn-accent btn-block" style="margin-top:12px;" onclick="submitOrder()">
+      ✅ 确认下单（存入历史并清空）
+    </button>
+  `;
+  switchPage('order');
+}
+
+function submitOrder() {
+  // Save current menu to history
+  saveToHistory();
+  // Clear selections
+  selectedItems = {};
+  // Clear remarks
+  document.querySelectorAll('.remark-tag.active').forEach(t => t.classList.remove('active'));
+  const customRemark = document.getElementById('customRemark');
+  if (customRemark) customRemark.value = '';
+  // Reset order page
+  document.getElementById('orderContent').innerHTML = `
+    <div class="empty-state">
+      <div class="empty-icon">✅</div>
+      <p>订单已提交并保存到历史<br>可继续选菜开始新一轮点单</p>
+    </div>
+  `;
+  updateOrderBadge();
+  showToast('已确认下单，可继续点新菜');
+  // Go back to menu page for next round
+  setTimeout(() => switchPage('menu'), 800);
+}
+
+function fullscreenOrder() {
+  const slip = document.querySelector('.order-slip');
+  if (!slip) return;
+
+  // Push state so back button closes the overlay
+  history.pushState({ page: 'fullscreen' }, '', '#fullscreen');
+
+  const overlay = document.createElement('div');
+  overlay.setAttribute('data-fullscreen-overlay', '1');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:999;padding:20px;overflow-y:auto;';
+  
+  function closeOverlay() {
+    overlay.remove();
+    history.back();
+  }
+  
+  overlay.innerHTML = `
+    <div style="max-width:400px;margin:0 auto;">
+      <div style="text-align:center;margin-bottom:12px;font-size:12px;color:#999;">— 请将此页面展示给服务员 —</div>
+      ${slip.outerHTML}
+      <button id="closeFullscreenBtn"
+        style="margin-top:20px;width:100%;padding:14px;background:#eee;border:none;border-radius:8px;font-size:16px;cursor:pointer;">
+        ✕ 关闭
+      </button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('closeFullscreenBtn').onclick = closeOverlay;
+}
+
+// === Utils ===
+// Currency to RMB conversion using saved settings
+function toRmb(price) {
+  const s = getSettings();
+  return (price / (s.exchangeRate || 39)).toFixed(0);
+}
+
+// Fetch with timeout (60s default)
+function fetchWithTimeout(url, options, ms = 60000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
+
+// Session persistence
+function saveSession() {
+  try {
+    const data = { menuData, recommendations, selectedItems };
+    sessionStorage.setItem('menuSession', JSON.stringify(data));
+  } catch(e) { /* quota exceeded, ignore */ }
+}
+
+function restoreSession() {
+  try {
+    const saved = sessionStorage.getItem('menuSession');
+    if (!saved) return false;
+    const data = JSON.parse(saved);
+    if (data.menuData) { menuData = data.menuData; renderMenu(); }
+    if (data.recommendations) { recommendations = data.recommendations; renderRecommendations(); }
+    if (data.selectedItems) { selectedItems = data.selectedItems; updateOrderBadge(); }
+    return !!data.menuData;
+  } catch(e) { return false; }
+}
+
+function showLoading(text) {
+  document.getElementById('loadingText').textContent = text;
+  document.getElementById('loadingOverlay').classList.add('active');
+}
+function setLoadingText(text) {
+  document.getElementById('loadingText').textContent = text;
+}
+function hideLoading() {
+  document.getElementById('loadingOverlay').classList.remove('active');
+}
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// === History ===
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem('menuHistory') || '[]'); } catch(e) { return []; }
+}
+
+function saveToHistory() {
+  if (!menuData) return;
+  const history = getHistory();
+  const entry = {
+    id: Date.now(),
+    shopName: menuData.shopNameCN || menuData.shopName || '未知餐厅',
+    shopNameEn: menuData.shopName || '',
+    cuisine: menuData.cuisine || '',
+    date: new Date().toLocaleDateString('zh-CN'),
+    data: menuData,
+    recommendations: recommendations
+  };
+  // Remove duplicate shop
+  const filtered = history.filter(h => h.shopName !== entry.shopName);
+  filtered.unshift(entry);
+  // Keep max 10
+  if (filtered.length > 10) filtered.length = 10;
+  localStorage.setItem('menuHistory', JSON.stringify(filtered));
+  renderHistory();
+}
+
+function loadFromHistory(id) {
+  const history = getHistory();
+  const entry = history.find(h => h.id === id);
+  if (!entry) return;
+  menuData = entry.data;
+  recommendations = entry.recommendations;
+  selectedItems = {};
+  renderMenu();
+  if (recommendations) renderRecommendations();
+  switchPage('menu');
+  showToast('已加载: ' + entry.shopName);
+}
+
+function clearHistory() {
+  if (!confirm('确认清空历史记录？')) return;
+  localStorage.removeItem('menuHistory');
+  renderHistory();
+  showToast('历史已清空');
+}
+
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  const history = getHistory();
+  if (history.length === 0) {
+    list.innerHTML = '<div style="font-size:13px;color:var(--text-secondary);padding:8px 0;">暂无历史记录</div>';
+    return;
+  }
+  list.innerHTML = history.map(h => `
+    <div onclick="loadFromHistory(${h.id})" style="background:var(--card);border-radius:8px;padding:12px;box-shadow:var(--shadow);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-size:14px;font-weight:500;">${h.shopName}</div>
+        <div style="font-size:12px;color:var(--text-secondary);">${h.shopNameEn} · ${h.date}</div>
+      </div>
+      <span style="color:var(--primary);font-size:20px;">→</span>
+    </div>
+  `).join('');
+}
+
+// === Demo Data ===
+const DEMO_MENU = {
+  shopName: "Butt Karahi",
+  shopNameCN: "巴特卡拉希烤肉店",
+  cuisine: "巴基斯坦传统烧烤 · 拉合尔老城区",
+  categories: [
+    {
+      name: "Karahi / کڑاہی",
+      nameCN: "卡拉希锅（招牌铁锅炒）",
+      items: [
+        { name: "Chicken Karahi", nameCN: "鸡肉卡拉希", description: "铁锅爆炒嫩鸡块，番茄青椒洋葱，浓郁汤汁，招牌必点", price: "Rs. 1,200/kg", priceNum: 1200, spicy: 1, popular: true },
+        { name: "Mutton Karahi", nameCN: "羊肉卡拉希", description: "带骨山羊肉铁锅慢炖，肉质酥烂，汁浓味厚", price: "Rs. 2,400/kg", priceNum: 2400, spicy: 1, popular: true },
+        { name: "Beef Karahi", nameCN: "牛肉卡拉希", description: "牛肉配番茄姜蒜铁锅炒制，肉感扎实", price: "Rs. 1,600/kg", priceNum: 1600, spicy: 2, popular: false },
+        { name: "Chicken White Karahi", nameCN: "白汁鸡肉卡拉希", description: "不加番茄的奶白汤底，黄油姜蒜调味，温和不辣", price: "Rs. 1,400/kg", priceNum: 1400, spicy: 0, popular: false }
+      ]
+    },
+    {
+      name: "BBQ / بی بی کیو",
+      nameCN: "烧烤类",
+      items: [
+        { name: "Seekh Kebab", nameCN: "铁签烤肉串", description: "碎羊肉混合香料捏成长条炭烤，外焦里嫩", price: "Rs. 120/pc", priceNum: 120, spicy: 1, popular: true },
+        { name: "Chicken Tikka", nameCN: "鸡肉提卡", description: "酸奶腌制鸡腿肉炭火烤，嫩滑多汁", price: "Rs. 350/plate", priceNum: 350, spicy: 1, popular: true },
+        { name: "Malai Boti", nameCN: "奶油烤鸡块", description: "奶油芝士腌制鸡肉，极嫩不辣，奶香浓郁", price: "Rs. 400/plate", priceNum: 400, spicy: 0, popular: true },
+        { name: "Lamb Chops", nameCN: "烤羊排", description: "整扇羊排炭烤，撒孜然辣椒粉，肉香四溢", price: "Rs. 280/pc", priceNum: 280, spicy: 1, popular: false },
+        { name: "Fish Tikka", nameCN: "烤鱼提卡", description: "淡水鱼块裹香料酸奶炭烤，外酥内嫩", price: "Rs. 450/plate", priceNum: 450, spicy: 1, popular: false }
+      ]
+    },
+    {
+      name: "Rice & Biryani / بریانی",
+      nameCN: "米饭/比尔亚尼",
+      items: [
+        { name: "Chicken Biryani", nameCN: "鸡肉比尔亚尼", description: "巴斯马蒂长粒香米层叠鸡肉，藏红花调色，巴基斯坦国菜", price: "Rs. 350", priceNum: 350, spicy: 1, popular: true },
+        { name: "Mutton Pulao", nameCN: "羊肉手抓饭", description: "羊肉汤煮香米，葡萄干坚果点缀，口感清香", price: "Rs. 400", priceNum: 400, spicy: 0, popular: false },
+        { name: "Plain Rice", nameCN: "白米饭", description: "巴斯马蒂香米，搭配卡拉希汤汁极佳", price: "Rs. 100", priceNum: 100, spicy: 0, popular: false }
+      ]
+    },
+    {
+      name: "Bread / روٹی",
+      nameCN: "主食/饼类",
+      items: [
+        { name: "Plain Naan", nameCN: "原味馕饼", description: "碳炉贴烤薄饼，外脆内软，蘸汤汁吃", price: "Rs. 30", priceNum: 30, spicy: 0, popular: false },
+        { name: "Butter Naan", nameCN: "黄油馕饼", description: "刷黄油的碳烤馕，香气扑鼻", price: "Rs. 50", priceNum: 50, spicy: 0, popular: true },
+        { name: "Garlic Naan", nameCN: "蒜香馕饼", description: "蒜蓉黄油碳烤馕，蒜香浓郁", price: "Rs. 60", priceNum: 60, spicy: 0, popular: false },
+        { name: "Roghni Naan", nameCN: "芝麻油馕", description: "撒白芝麻的油酥馕，厚实有嚼劲", price: "Rs. 50", priceNum: 50, spicy: 0, popular: false }
+      ]
+    },
+    {
+      name: "Drinks / مشروبات",
+      nameCN: "饮品",
+      items: [
+        { name: "Lassi (Sweet)", nameCN: "甜拉西（酸奶饮）", description: "浓稠酸奶加糖搅打，巴基斯坦经典消暑饮品", price: "Rs. 120", priceNum: 120, spicy: 0, popular: true },
+        { name: "Lassi (Salt)", nameCN: "咸拉西", description: "咸味酸奶饮，搭配烤肉解腻", price: "Rs. 120", priceNum: 120, spicy: 0, popular: false },
+        { name: "Fresh Lime Water", nameCN: "鲜柠檬水", description: "青柠鲜榨加冰，清爽解辣", price: "Rs. 80", priceNum: 80, spicy: 0, popular: false },
+        { name: "Doodh Patti Chai", nameCN: "奶茶（巴式浓茶）", description: "浓缩红茶煮牛奶+小豆蔻，当地人顿顿喝", price: "Rs. 60", priceNum: 60, spicy: 0, popular: true },
+        { name: "7UP / Pepsi", nameCN: "七喜/百事可乐", description: "罐装碳酸饮料", price: "Rs. 80", priceNum: 80, spicy: 0, popular: false }
+      ]
+    }
+  ]
+};
+
+const DEMO_RECOMMENDATIONS = {
+  forOne: [
+    {
+      name: "🔥 招牌烤肉独享",
+      items: ["鸡肉提卡 x1", "黄油馕饼 x2", "甜拉西 x1"],
+      totalPrice: "Rs. 570",
+      reason: "一人份经典搭配，嫩烤鸡+热馕+冰拉西，在拉合尔街头的正确打开方式"
+    },
+    {
+      name: "🍛 卡拉希入门套餐",
+      items: ["鸡肉卡拉希(半份) x1", "原味馕饼 x2", "鲜柠檬水 x1"],
+      totalPrice: "Rs. 770",
+      reason: "半份卡拉希分量也够一人吃，铁锅端上桌视觉满分，馕蘸汤汁是灵魂吃法"
+    },
+    {
+      name: "🧈 不辣也能吃巴餐",
+      items: ["奶油烤鸡块 x1", "白米饭 x1", "奶茶 x1"],
+      totalPrice: "Rs. 560",
+      reason: "零辣度组合，奶油鸡块嫩到离谱，适合吃不了辣但想体验当地味道"
+    }
+  ],
+  forTwo: [
+    {
+      name: "🎉 烤肉拼盘双人局",
+      items: ["鸡肉卡拉希(半份) x1", "鸡肉提卡 x1", "铁签烤肉串 x4", "黄油馕饼 x4", "甜拉西 x2"],
+      totalPrice: "Rs. 1,650",
+      reason: "一锅一烤一串全齐，两个人吃到扶墙出，性价比拉满"
+    },
+    {
+      name: "🏆 拉合尔必吃清单",
+      items: ["羊肉卡拉希(半份) x1", "奶油烤鸡块 x1", "蒜香馕饼 x3", "鲜柠檬水 x2"],
+      totalPrice: "Rs. 1,920",
+      reason: "羊肉卡拉希是拉合尔的城市名片，配奶油鸡块荤素搭，柠檬水解辣神器"
+    }
+  ],
+  forFour: [
+    {
+      name: "👨‍👩‍👧‍👦 全家福豪华桌",
+      items: ["鸡肉卡拉希 x1kg", "烤羊排 x4", "鸡肉提卡 x1", "奶油烤鸡块 x1", "鸡肉比尔亚尼 x2", "黄油馕饼 x6", "甜拉西 x2", "鲜柠檬水 x2"],
+      totalPrice: "Rs. 3,780",
+      reason: "四人份大桌菜，锅/烤/串/饭全覆盖，每人不到1000卢比（约25元）吃撑"
+    },
+    {
+      name: "🌟 烤肉盛宴",
+      items: ["羊肉卡拉希(半份) x1", "铁签烤肉串 x8", "鸡肉提卡 x2", "烤鱼提卡 x1", "蒜香馕饼 x6", "羊肉手抓饭 x1", "甜拉西 x4"],
+      totalPrice: "Rs. 3,940",
+      reason: "全烤肉阵容，羊/鸡/鱼三种肉一网打尽，串串按根点很有街头烧烤的仪式感"
+    }
+  ]
+};
+
+// === Init ===
+function loadDemoData() {
+  menuData = DEMO_MENU;
+  recommendations = DEMO_RECOMMENDATIONS;
+  renderMenu();
+  renderRecommendations();
+  switchPage('menu');
+}
+
+window.addEventListener('load', () => {
+  // Try to restore previous scan session first
+  if (restoreSession()) {
+    switchPage('menu');
+    setTimeout(() => showToast('已恢复上次识别的菜单'), 600);
+  } else {
+    // No previous session, load demo
+    loadDemoData();
+    setTimeout(() => showToast('已加载示例菜单，可直接体验功能'), 600);
+  }
+  // Set currency badge from saved settings
+  const s = getSettings();
+  document.getElementById('currencyBadge').textContent = s.currency + '→¥';
+  // Render history
+  renderHistory();
+});
+</script>
+</body>
+</html>
