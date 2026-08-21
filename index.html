@@ -514,6 +514,21 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Streaming output cues */
+.stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--primary);
+  vertical-align: -2px;
+  margin-left: 2px;
+  animation: caretBlink 0.9s step-end infinite;
+}
+@keyframes caretBlink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+.dot-flow { animation: dotFlow 1.4s linear infinite; letter-spacing: 1px; }
+@keyframes dotFlow { 0% { opacity: .25; } 50% { opacity: 1; } 100% { opacity: .25; } }
+.rec-card-streaming { border: 1px dashed var(--primary); }
+
 /* Order Page */
 .order-slip {
   background: var(--card);
@@ -930,6 +945,10 @@ input[type="file"] { display: none; }
   <div class="loading-sub" id="loadingSub">AI 正在分析图片中的文字和菜品</div>
   <div class="loading-progress"><div class="loading-progress-bar" id="loadingBar" style="width:10%"></div></div>
   <div class="loading-timer" id="loadingTimer"></div>
+  <button id="loadingCancelBtn" onclick="cancelRecognition()"
+    style="margin-top:24px;padding:10px 28px;background:transparent;color:rgba(255,255,255,0.75);border:1.5px solid rgba(255,255,255,0.35);border-radius:20px;font-size:14px;cursor:pointer;">
+    取消
+  </button>
 </div>
 
 <!-- Currency Picker (用户友好的币种选择) -->
@@ -1059,6 +1078,29 @@ let menuData = null; // parsed menu
 let recommendations = null; // AI recommendations
 let selectedItems = {}; // {index: qty}
 let currentRecType = 1;
+
+// === Cancellation (用户可中断长时间识别) ===
+let _recognitionCancelled = false;
+const _activeControllers = new Set();
+
+function registerController(c) {
+  _activeControllers.add(c);
+  return c;
+}
+function releaseController(c) {
+  _activeControllers.delete(c);
+}
+function cancelRecognition() {
+  _recognitionCancelled = true;
+  _activeControllers.forEach(c => { try { c.abort(); } catch(e) {} });
+  _activeControllers.clear();
+  hideLoading();
+  showToast('已取消识别，图片已保留');
+  // 图片仍在，允许直接重试
+  if (typeof pendingImages !== 'undefined' && pendingImages && pendingImages.length) {
+    showRetryOption();
+  }
+}
 
 // === Settings ===
 const DEFAULT_SETTINGS = {
@@ -1502,21 +1544,44 @@ const COMPRESS_LEVELS = [
 function compressImage(dataUrl, level = 0) {
   const { maxWidth, quality } = COMPRESS_LEVELS[Math.min(level, 2)];
   return new Promise(resolve => {
+    let settled = false;
+    const done = (val) => { if (!settled) { settled = true; resolve(val); } };
+
+    // 兜底1：8 秒仍未完成则放弃压缩，用原图（宁可慢也不能卡死）
+    const timer = setTimeout(() => {
+      console.warn('compressImage timeout, using original');
+      done(dataUrl);
+    }, 8000);
+
+    const finish = (val) => { clearTimeout(timer); done(val); };
+
     const img = new Image();
+    // 兜底2：解码失败
+    img.onerror = () => {
+      console.warn('compressImage decode failed, using original');
+      finish(dataUrl);
+    };
     img.onload = () => {
-      const canvas = document.createElement('canvas');
-      let w = img.width, h = img.height;
-      if (w > maxWidth) { h = h * maxWidth / w; w = maxWidth; }
-      canvas.width = w; canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, w, h);
-      let result = canvas.toDataURL('image/jpeg', quality);
-      // 强制限制 150KB 以内
-      const sizeKB = (result.length * 0.75) / 1024;
-      if (sizeKB > 150 && quality > 0.2) {
-        result = canvas.toDataURL('image/jpeg', 0.2);
+      // 兜底3：canvas 操作在低端机可能因内存不足抛错
+      try {
+        const canvas = document.createElement('canvas');
+        let w = img.width, h = img.height;
+        if (!w || !h) { finish(dataUrl); return; }
+        if (w > maxWidth) { h = h * maxWidth / w; w = maxWidth; }
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        let result = canvas.toDataURL('image/jpeg', quality);
+        // 强制限制 150KB 以内
+        const sizeKB = (result.length * 0.75) / 1024;
+        if (sizeKB > 150 && quality > 0.2) {
+          result = canvas.toDataURL('image/jpeg', 0.2);
+        }
+        finish(result);
+      } catch (e) {
+        console.warn('compressImage canvas error:', e.message);
+        finish(dataUrl);
       }
-      resolve(result);
     };
     img.src = dataUrl;
   });
@@ -1602,10 +1667,15 @@ async function recognizeWithFallback(images, settings) {
     } catch (e) {
       lastError = e;
       console.warn(`Strategy ${i} failed:`, e.message);
+      // 用户主动取消：立刻停止，不再重试
+      if (_recognitionCancelled || e.message === '__CANCELLED__') throw e;
       if (i < strategies.length - 1) {
-        // 检测限流：429 或连接被拒时加长等待
-        const isRateLimit = e.message.includes('429') || e.message.includes('throttl') || e.message.includes('Too Many');
-        const delay = isRateLimit ? 5000 : 2500;
+        // 检测限流：429/throttle 明确限流，或空响应/格式异常（静默丢弃的典型症状）
+        const msg = e.message || '';
+        const isRateLimit = msg.includes('429') || msg.includes('throttl') || msg.includes('Too Many') ||
+          msg.includes('返回内容为空') || msg.includes('格式异常') || msg.includes('未识别到任何菜品');
+        // 关键：服务端对间隔 <3s 的连续请求会静默丢弃，兜底延迟必须 >3s
+        const delay = isRateLimit ? 5000 : 3500;
         if (isRateLimit) {
           setLoadingText('服务繁忙，稍作等待', '请求频率过高，冷却几秒后自动重试');
           setLoadingIcon('⏳');
@@ -1635,6 +1705,9 @@ async function startRecognition() {
 
   // 保存图片用于失败重试
   pendingImages = [...images];
+  // 重置取消标记（上次取消不应影响本次）
+  _recognitionCancelled = false;
+  _activeControllers.clear();
   showLoading('准备识别菜单', '正在初始化...');
   setLoadingIcon('📸');
 
@@ -1665,8 +1738,12 @@ async function startRecognition() {
       setLoadingProgress(100);
       await new Promise(r => setTimeout(r, 600)); // 让用户看到成功状态
       pendingImages = null; // 清除待重试图片
+      images = [];          // 清空已拍照片，避免下一家餐厅叠加识别
+      renderPreviews();
       hideRetryOption();
       selectedItems = {}; // 新菜单清空选择
+      _customRecResults = null; // 清空上一家餐厅的自由推荐结果
+      _customRecQuery = '';
       renderMenu();
       saveSession();
       hideLoading();
@@ -1688,22 +1765,27 @@ async function startRecognition() {
     enrichMenuAsync(menuData);
   } catch (err) {
     hideLoading();
+    // 用户主动取消：静默返回，不显示错误（cancelRecognition 已给过 toast + 重试入口）
+    if (err && (err.message === '__CANCELLED__' || _recognitionCancelled)) {
+      return;
+    }
     console.error('Recognition failed after all retries:', err);
     
     // 提供具体的错误指引
     let msg = '';
-    if (err instanceof TypeError && String(err.message).includes('null')) {
+    const em = String((err && err.message) || err || '');
+    if (err instanceof TypeError && em.includes('null')) {
       // DOM 元素暂时不可用（移动端偶发），自动重试一次
       console.warn('DOM null error during recognition, auto-retrying...');
       msg = '页面渲染异常，请点击重试';
-    } else if (err.message.includes('403')) {
+    } else if (em.includes('403')) {
       msg = '被拦截(403)，请在设置中配置 CORS 代理';
-    } else if (err.message.includes('timeout') || err.name === 'AbortError') {
+    } else if (em.includes('timeout') || err.name === 'AbortError') {
       msg = '多次超时，网络可能不稳定';
-    } else if (err.message.includes('JSON') || err.message.includes('识别结果')) {
+    } else if (em.includes('JSON') || em.includes('识别结果')) {
       msg = '模型返回格式异常，请重试';
     } else {
-      msg = err.message.substring(0, 50);
+      msg = em.substring(0, 50) || '未知错误';
     }
     showToast('识别失败: ' + msg, 4000);
     
@@ -1738,11 +1820,11 @@ async function recognizeMultiPage(allImages, settings) {
       // 继续识别其他页，不中断
     }
     
-    // 页间间隔 3 秒，避免触发 API 限流
+    // 页间间隔 3.5 秒，避免触发 API 静默限流（阈值 3s，需留余量）
     if (i < total - 1) {
       setLoadingText(`准备识别第 ${pageNum + 1} 页`, '等待几秒避免请求过频');
       setLoadingIcon('⏳');
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise(r => setTimeout(r, 3500));
     }
   }
 
@@ -1801,9 +1883,13 @@ async function recognizePageWithRetry(imgs, settings, pageNum, totalPages) {
     } catch (e) {
       lastError = e;
       console.warn(`Page ${pageNum} strategy ${i} failed:`, e.message);
+      if (_recognitionCancelled || e.message === '__CANCELLED__') throw e;
       if (i < strategies.length - 1) {
-        const isRateLimit = e.message.includes('429') || e.message.includes('throttl');
-        const delay = isRateLimit ? 5000 : 3000;
+        const msg = e.message || '';
+        const isRateLimit = msg.includes('429') || msg.includes('throttl') ||
+          msg.includes('返回内容为空') || msg.includes('格式异常');
+        // 3000ms 正好卡在静默丢弃阈值上，留出余量
+        const delay = isRateLimit ? 5000 : 3500;
         if (isRateLimit) setLoadingText(`第${pageNum}页 请求限流，冷却中...`);
         await new Promise(r => setTimeout(r, delay));
       }
@@ -1877,8 +1963,8 @@ function retryRecognition() {
 }
 
 function showRetryOption() {
-  // 在首页显示一个重试按钮
-  const zone = document.getElementById('uploadZone');
+  // 在首页显示一个重试按钮（元素真实 id 是 cameraZone，不是 uploadZone）
+  const zone = document.getElementById('cameraZone');
   if (!zone) return;
   let retryBtn = document.getElementById('retryBtn');
   if (!retryBtn) {
@@ -1891,6 +1977,8 @@ function showRetryOption() {
     zone.parentNode.insertBefore(retryBtn, zone.nextSibling);
   }
   retryBtn.style.display = 'block';
+  // 确保用户看得到
+  try { retryBtn.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e) {}
 }
 
 // 隐藏重试按钮（成功后）
@@ -2038,7 +2126,7 @@ async function callVisionAPI(prompt, imgs, timeout = 60000) {
   });
 
   const url = getApiUrl(settings);
-  const controller = new AbortController();
+  const controller = registerController(new AbortController());
   const timer = setTimeout(() => controller.abort(), timeout);
 
   try {
@@ -2072,11 +2160,13 @@ async function callVisionAPI(prompt, imgs, timeout = 60000) {
     return text;
   } catch (err) {
     if (err.name === 'AbortError') {
+      if (_recognitionCancelled) throw new Error('__CANCELLED__');
       throw new Error(`请求超时(${Math.round(timeout/1000)}s)，网络可能不稳定`);
     }
     throw err;
   } finally {
     clearTimeout(timer);
+    releaseController(controller);
   }
 }
 
@@ -2185,6 +2275,79 @@ async function callTextAPI(prompt) {
     return await readSSEStream(resp);
   } catch (err) {
     if (err.name === 'AbortError') throw new Error('请求超时(60s)');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 流式版本：边收边回调，用于自由推荐的实时渲染
+async function callTextAPIStream(prompt, onDelta, externalController) {
+  const settings = getSettings();
+  if (!settings.key) throw new Error('__NO_KEY__');
+  const url = getApiUrl(settings);
+  const controller = externalController || new AbortController();
+  const timer = setTimeout(() => { try { controller.abort(); } catch(e) {} }, 60000);
+
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${settings.key}`
+      },
+      body: JSON.stringify({
+        model: settings.model,
+        messages: [
+          { role: 'system', content: '直接输出JSON数组，不要解释或使用代码块。' },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 2048,
+        temperature: 0.3,
+        stream: true,
+        chat_template_kwargs: { enable_thinking: false }
+      }),
+      signal: controller.signal
+    });
+
+    if (!resp.ok) throw new Error(`API 错误 ${resp.status}`);
+
+    // 兜底：不支持 ReadableStream 的浏览器退回一次性读取
+    if (!resp.body || typeof resp.body.getReader !== 'function') {
+      const full = parseSSEText(await resp.text());
+      if (onDelta) onDelta(full, true);
+      return full;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let result = '';
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      let changed = false;
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const chunk = JSON.parse(data);
+          const delta = chunk.choices?.[0]?.delta?.content;
+          if (delta) { result += delta; changed = true; }
+        } catch (e) { /* 跳过半行 */ }
+      }
+      if (changed && onDelta) {
+        try { onDelta(result, false); } catch (e) { console.warn('onDelta error:', e); }
+      }
+    }
+    if (onDelta) { try { onDelta(result, true); } catch (e) {} }
+    return result;
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('请求超时或已取消');
     throw err;
   } finally {
     clearTimeout(timer);
@@ -2647,6 +2810,12 @@ function renderCustomRecUI(container) {
     return;
   }
 
+  // 被分享的用户没有自己的 AI 配置：直接给兜底说明，不让他白输入一遍
+  if (isGuestMode && !getSettings().key) {
+    container.innerHTML = buildCustomRecErrorHtml(new Error('__NO_KEY__'));
+    return;
+  }
+
   // Quick suggestion chips
   const suggestions = ['想吃辣的', '不要太贵', '适合拍照打卡', '有什么甜品', '清淡健康的'];
   const chipsHtml = suggestions.map(s =>
@@ -2697,6 +2866,48 @@ function fillCustomRec(text) {
   }
 }
 
+let _customRecController = null;
+
+// 把未闭合的 JSON 片段补齐成可解析的形式（用于流式增量渲染）
+function repairJsonFragment(frag) {
+  let s = frag;
+  let inStr = false, esc = false;
+  const stack = [];
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\') { if (inStr) esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{' || ch === '[') stack.push(ch);
+    else if (ch === '}' || ch === ']') stack.pop();
+  }
+  if (inStr) s += '"';               // 补上未闭合的字符串
+  s = s.replace(/\s+$/, '');
+  s = s.replace(/,\s*"[^"]*"\s*:?\s*$/, '');   // 去掉尾部没有值的 key
+  s = s.replace(/\{\s*"[^"]*"\s*:\s*$/, '{');  // 对象内第一个 key 就断了
+  s = s.replace(/,\s*$/, '');                  // 去掉尾逗号
+  for (let i = stack.length - 1; i >= 0; i--) s += (stack[i] === '{' ? '}' : ']');
+  return s;
+}
+
+// 从流式文本中尽可能解析出已完成的方案（允许最后一个不完整）
+function parseCustomRecStreaming(raw) {
+  let text = String(raw || '').replace(/```json\s*/g, '').replace(/```\s*/g, '');
+  const start = text.indexOf('[');
+  if (start === -1) return null;
+  const body = text.slice(start);
+  try {
+    const a = JSON.parse(body);
+    if (Array.isArray(a)) return a;
+  } catch (e) { /* 还没收完，走修复 */ }
+  try {
+    const a = JSON.parse(repairJsonFragment(body));
+    if (Array.isArray(a)) return a.filter(x => x && typeof x === 'object');
+  } catch (e) { /* 这一帧解析不出来，等下一帧 */ }
+  return null;
+}
+
 async function sendCustomRec() {
   const input = document.getElementById('customRecInput');
   if (!input) return;
@@ -2709,37 +2920,81 @@ async function sendCustomRec() {
   _customRecLoading = true;
   _customRecResults = null;
 
-  // Update UI to loading state
   const sendBtn = document.getElementById('customRecSendBtn');
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '⏳'; }
   const resultsEl = document.getElementById('customRecResults');
   if (resultsEl) {
     resultsEl.innerHTML = `
-      <div class="custom-rec-loading">
+      <div class="custom-rec-loading" id="customRecThinking">
         <div class="spinner"></div>
-        <div>正在为你挑选...</div>
+        <div>AI 正在读菜单，为你挑选<span class="dot-flow">...</span></div>
       </div>`;
   }
 
+  _customRecController = new AbortController();
+  let lastRender = 0;
+  let lastGood = null;
+
+  const onDelta = (accum, isFinal) => {
+    const now = Date.now();
+    if (!isFinal && now - lastRender < 90) return;  // 节流，避免频繁重排
+    lastRender = now;
+    const partial = parseCustomRecStreaming(accum);
+    if (partial && partial.length > 0) {
+      lastGood = partial;
+      renderCustomRecResults(partial, !isFinal);
+    }
+  };
+
   try {
     const prompt = buildCustomRecPrompt(query);
-    const raw = await callTextAPI(prompt);
-    const parsed = parseCustomRecJSON(raw);
-    if (!parsed || parsed.length === 0) {
-      throw new Error('未能解析推荐结果');
-    }
-    _customRecResults = parsed;
-    renderCustomRecResults(parsed);
+    const raw = await callTextAPIStream(prompt, onDelta, _customRecController);
+    const parsed = parseCustomRecJSON(raw) || lastGood;
+    if (!parsed || parsed.length === 0) throw new Error('未能解析推荐结果');
+    // 过滤掉流式过程中残留的空壳
+    const clean = parsed.filter(r => r && (r.name || (r.items && r.items.length)));
+    _customRecResults = clean.length ? clean : parsed;
+    renderCustomRecResults(_customRecResults, false);
   } catch (err) {
     console.error('Custom rec error:', err);
-    if (resultsEl) {
-      resultsEl.innerHTML = `<div class="empty-state"><div class="empty-icon">😅</div><p>推荐失败：${err.message}<br>请稍后再试</p></div>`;
+    // 已经流出了部分结果就保留，不要清空
+    if (lastGood && lastGood.length > 0) {
+      _customRecResults = lastGood.filter(r => r && r.name && r.items && r.items.length);
+      renderCustomRecResults(_customRecResults, false);
+      showToast('推荐未完全生成，已保留部分结果');
+    } else if (resultsEl) {
+      resultsEl.innerHTML = buildCustomRecErrorHtml(err);
     }
   } finally {
     _customRecLoading = false;
+    _customRecController = null;
     const btn = document.getElementById('customRecSendBtn');
     if (btn) { btn.disabled = false; btn.textContent = '🔍'; }
   }
+}
+
+// 错误兜底文案：区分「被分享的用户没有 AI 凭证」和普通网络错误
+function buildCustomRecErrorHtml(err) {
+  const m = String((err && err.message) || err || '');
+  if (m === '__NO_KEY__') {
+    return `<div class="empty-state" style="padding:28px 20px;">
+      <div class="empty-icon">🔒</div>
+      <p style="line-height:1.7;">这份菜单是别人分享给你的，<br>自由推荐需要你自己的 AI 配置。</p>
+      <p style="font-size:12px;color:var(--text-secondary);margin-top:10px;line-height:1.6;">
+        菜单浏览、翻译、点餐、给店员看订单都可以正常使用。<br>
+        另外三个「一人餐 / 二人餐 / 四人餐」标签里已带好推荐方案，可直接用。
+      </p>
+    </div>`;
+  }
+  const friendly = m.includes('Failed to fetch') || m.includes('NetworkError')
+    ? '网络连接不上 AI 服务'
+    : (m.includes('超时') ? '请求超时' : m.substring(0, 40));
+  return `<div class="empty-state" style="padding:28px 20px;">
+    <div class="empty-icon">😅</div>
+    <p>推荐失败：${friendly}</p>
+    <p style="font-size:12px;color:var(--text-secondary);margin-top:8px;">可换个说法重试，或先用现成的一人餐 / 二人餐 / 四人餐方案。</p>
+    <button onclick="sendCustomRec()" style="margin-top:14px;padding:8px 22px;background:var(--primary);color:#fff;border:none;border-radius:16px;font-size:13px;cursor:pointer;">重试</button>
+  </div>`;
 }
 
 function buildCustomRecPrompt(userQuery) {
@@ -2817,12 +3072,14 @@ function parseCustomRecJSON(raw) {
   return null;
 }
 
-function renderCustomRecResults(recs) {
+function renderCustomRecResults(recs, streaming) {
   const resultsEl = document.getElementById('customRecResults');
   if (!resultsEl) return;
 
   const s = getSettings();
-  resultsEl.innerHTML = recs.map((rec, i) => {
+  const cardsHtml = recs.map((rec, i) => {
+    const isLast = i === recs.length - 1;
+    const pending = !!streaming && isLast;   // 最后一张还在生成中
     const totalNum = rec.total || 0;
     const totalDisplay = totalNum > 0 ? `${s.currency} ${totalNum}` : '';
     const totalRmb = totalNum > 0 ? ` ≈¥${toRmb(totalNum)}` : '';
@@ -2841,19 +3098,37 @@ function renderCustomRecResults(recs) {
       return `<div style="padding:3px 0;">${String(recItem)}</div>`;
     }).join('');
 
+    const reasonHtml = rec.reason
+      ? `<div class="rec-card-reason">💡 ${rec.reason}${pending ? '<span class="stream-caret"></span>' : ''}</div>`
+      : (pending ? '<div class="rec-card-reason" style="color:var(--text-secondary);">💡 <span class="stream-caret"></span></div>' : '');
+
+    const btnHtml = pending
+      ? `<div style="text-align:center;padding:8px 0 2px;font-size:12px;color:var(--text-secondary);">生成中<span class="dot-flow">...</span></div>`
+      : `<button class="rec-use-btn" onclick="useCustomRec(${i})">📝 使用此方案下单</button>`;
+
     return `
-    <div class="rec-card">
+    <div class="rec-card${pending ? ' rec-card-streaming' : ''}">
       <div class="rec-card-header">
-        <div class="rec-card-title">${rec.name || '推荐方案'}</div>
+        <div class="rec-card-title">${rec.name || (pending ? '正在构思…' : '推荐方案')}</div>
         <div class="rec-card-price" style="white-space:nowrap;">${totalDisplay}<span style="color:#888;font-size:12px;">${totalRmb}</span></div>
       </div>
       <div class="rec-card-items">${itemsHtml}</div>
-      <div class="rec-card-reason">💡 ${rec.reason || ''}</div>
-      <button class="rec-use-btn" onclick="useCustomRec(${i})">
-        📝 使用此方案下单
-      </button>
+      ${reasonHtml}
+      ${btnHtml}
     </div>`;
   }).join('');
+
+  const statusHtml = streaming
+    ? `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--primary);margin-bottom:10px;">
+         <span class="spinner" style="width:13px;height:13px;border-width:2px;display:inline-block;"></span>
+         <span>AI 正在实时生成推荐<span class="dot-flow">...</span></span>
+       </div>`
+    : '';
+
+  const html = statusHtml + cardsHtml;
+  if (resultsEl._lastHtml === html) return;   // 同一帧内容不变则不重绘
+  resultsEl._lastHtml = html;
+  resultsEl.innerHTML = html;
 }
 
 function useCustomRec(index) {
@@ -3629,7 +3904,20 @@ async function shareMenu() {
   if (_shareInProgress) return;
   if (!menuData) { showToast('暂无菜单数据'); return; }
   _shareInProgress = true;
+  try {
+    await _shareMenuImpl();
+  } catch (e) {
+    console.error('shareMenu failed:', e);
+    const qc = document.getElementById('qrContainer');
+    if (qc) qc.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-secondary);font-size:13px;">二维码生成失败<br><button onclick="closeShareModal();setTimeout(shareMenu,150)" style="margin-top:12px;padding:8px 20px;background:var(--primary);color:#fff;border:none;border-radius:16px;font-size:13px;cursor:pointer;">重试</button></div>';
+    showToast('分享生成失败，可用链接分享');
+  } finally {
+    // 无论成功失败都要复位，否则分享按钮会永久失灵
+    _shareInProgress = false;
+  }
+}
 
+async function _shareMenuImpl() {
   // === Build full share data (link uses this — complete with recommendations) ===
   const fullData = {
     s: menuData.shopName || '',
@@ -3684,14 +3972,22 @@ async function shareMenu() {
   try {
     const qrData = { ...fullData };
     delete qrData.r; // QR留给餐厅用，不含AI推荐
-    const res = await fetch('/api/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: qrData })
-    });
-    if (res.ok) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => { try { ctrl.abort(); } catch(e){} }, 10000);
+    let res;
+    try {
+      res = await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: qrData }),
+        signal: ctrl.signal
+      });
+    } finally {
+      clearTimeout(t);
+    }
+    if (res && res.ok) {
       const { id } = await res.json();
-      shortUrl = `${location.origin}/s/${id}`;
+      if (id) shortUrl = `${location.origin}/s/${id}`;
     }
   } catch (e) {
     console.warn('Save to KV failed, falling back to compressed URL:', e);
@@ -3730,7 +4026,6 @@ async function shareMenu() {
   }
   _shareQrMode = 'restaurant';
   _shareFullData = fullData;
-  _shareInProgress = false;
 }
 
 function closeShareModal() {
@@ -3876,23 +4171,44 @@ function parseSharedData(data) {
   isGuestMode = true;
 }
 
+let _shareLoadFailed = false;
+let _shareRetryTarget = '';
+let _shareSource = ''; // 'qr' = 短链二维码（餐厅版），'link' = 分享链接（完整版）
+
+async function fetchSharedMenuById(id, attempt) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => { try { ctrl.abort(); } catch(e){} }, 12000);
+  try {
+    const res = await fetch(`/api/menu?id=${encodeURIComponent(id)}&t=${Date.now()}`, { signal: ctrl.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const body = await res.json();
+    if (!body || !body.data) throw new Error('empty payload');
+    return body.data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function tryLoadSharedMenu() {
   // === Method 1: Short URL path /s/[id] — fetch from API ===
   const pathMatch = location.pathname.match(/^\/s\/([a-z0-9]{4,12})$/);
   if (pathMatch) {
     const id = pathMatch[1];
-    try {
-      const res = await fetch(`/api/menu?id=${id}`);
-      if (res.ok) {
-        const { data } = await res.json();
+    _shareRetryTarget = location.href;
+    _shareSource = 'qr';
+    // 关键路径：三次重试，餐厅现场网络可能不稳
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const data = await fetchSharedMenuById(id, attempt);
         parseSharedData(data);
         return true;
+      } catch (e) {
+        console.warn(`Load shared menu attempt ${attempt} failed:`, e.message);
+        if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 1200));
       }
-    } catch(e) {
-      console.error('Failed to load menu from short URL:', e);
     }
-    // If API fails, show error
-    showToast('菜单加载失败，请重试');
+    // 三次都失败：标记失败，绝不能回落到示例菜单（服务员会看到假菜单）
+    _shareLoadFailed = true;
     return false;
   }
 
@@ -3904,16 +4220,37 @@ async function tryLoadSharedMenu() {
   }
   if (!compressed) return false;
 
+  _shareRetryTarget = location.href;
+  _shareSource = 'link';
   try {
     const json = LZString.decompressFromEncodedURIComponent(compressed);
-    if (!json) { console.error('LZString decompress failed'); return false; }
+    if (!json) throw new Error('LZString decompress failed');
     const data = JSON.parse(json);
     parseSharedData(data);
     return true;
   } catch(e) {
     console.error('Failed to load shared menu:', e);
+    _shareLoadFailed = true;
     return false;
   }
+}
+
+// 分享链接加载失败的专用页面：明确告知，提供重试，绝不展示示例菜单
+function showShareLoadError() {
+  const app = document.body;
+  const overlay = document.createElement('div');
+  overlay.id = 'shareErrorOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:var(--bg,#fff);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;text-align:center;';
+  overlay.innerHTML = `
+    <div style="font-size:48px;margin-bottom:16px;">📡</div>
+    <h2 style="font-size:18px;margin:0 0 8px;color:var(--text,#222);">菜单加载失败</h2>
+    <p style="font-size:14px;line-height:1.6;color:var(--text-secondary,#888);margin:0 0 24px;max-width:280px;">
+      网络不稳定或链接已过期。<br>请检查网络后重试，或让对方重新分享。
+    </p>
+    <button onclick="location.reload()" style="padding:12px 32px;background:var(--primary,#e8590c);color:#fff;border:none;border-radius:22px;font-size:15px;cursor:pointer;">重新加载</button>
+    <button onclick="document.getElementById('shareErrorOverlay').remove()" style="margin-top:12px;padding:8px 20px;background:transparent;color:var(--text-secondary,#888);border:none;font-size:13px;cursor:pointer;text-decoration:underline;">关闭</button>
+  `;
+  app.appendChild(overlay);
 }
 
 function enterGuestMode() {
@@ -3922,6 +4259,12 @@ function enterGuestMode() {
   if (navItems[0]) navItems[0].style.display = 'none'; // 拍菜单
   // QR扫码进来没有推荐数据时隐藏推荐tab
   if (!recommendations && navItems[2]) navItems[2].style.display = 'none';
+
+  // 二维码（餐厅版）不含 AI 推荐，隐藏「自由推荐」tab；分享链接则保留
+  if (_shareSource === 'qr') {
+    const recTabs = document.querySelectorAll('.rec-tab');
+    if (recTabs[3]) recTabs[3].style.display = 'none';
+  }
 
   // 隐藏历史区域（guest 没有自己的扫描历史）
   const historySection = document.getElementById('historySection');
@@ -3973,6 +4316,12 @@ window.addEventListener('load', async () => {
   // Check if this is a shared menu URL
   if (await tryLoadSharedMenu()) {
     enterGuestMode();
+    return;
+  }
+
+  // 分享链接/二维码打开但加载失败：显示错误页，绝不回落到示例菜单
+  if (_shareLoadFailed) {
+    showShareLoadError();
     return;
   }
 
