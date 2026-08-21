@@ -3110,11 +3110,18 @@ function shareMenu() {
 
   // Check URL length - QR codes work best under 2500 chars
   if (shareUrl.length > 2500) {
-    // Further strip: remove descriptions entirely
+    // Level 1: remove descriptions
     shareData.c.forEach(cat => { cat.i.forEach(item => { delete item.d; }); });
     const json2 = JSON.stringify(shareData);
     const compressed2 = LZString.compressToEncodedURIComponent(json2);
     shareUrl = baseUrl + '?m=' + compressed2;
+  }
+  if (shareUrl.length > 2500) {
+    // Level 2: remove includes (set menu sub-items)
+    shareData.c.forEach(cat => { cat.i.forEach(item => { delete item.inc; item.is = 0; }); });
+    const json3 = JSON.stringify(shareData);
+    const compressed3 = LZString.compressToEncodedURIComponent(json3);
+    shareUrl = baseUrl + '?m=' + compressed3;
   }
 
   // Show modal
@@ -3125,14 +3132,19 @@ function shareMenu() {
   // Generate QR code
   const qrContainer = document.getElementById('qrContainer');
   qrContainer.innerHTML = '';
-  new QRCode(qrContainer, {
-    text: shareUrl,
-    width: 200,
-    height: 200,
-    colorDark: '#1B5E20',
-    colorLight: '#ffffff',
-    correctLevel: QRCode.CorrectLevel.M
-  });
+  try {
+    new QRCode(qrContainer, {
+      text: shareUrl,
+      width: 200,
+      height: 200,
+      colorDark: '#1B5E20',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.L
+    });
+  } catch(e) {
+    console.error('QR generation failed:', e, 'URL length:', shareUrl.length);
+    qrContainer.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px;">菜单数据过大，二维码无法生成<br>请使用下方链接分享</div>';
+  }
 }
 
 function closeShareModal() {
