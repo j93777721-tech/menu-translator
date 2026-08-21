@@ -613,13 +613,6 @@ input[type="file"] { display: none; }
     📍 当前位置：巴基斯坦拉合尔<br>
     已加载示例菜单供体验，拍摄真实菜单后将自动替换为识别结果
   </div>
-  <div id="historySection" style="margin-bottom:16px;">
-    <div class="section-title" style="font-size:14px; display:flex; justify-content:space-between; align-items:center;">
-      <span>📋 历史菜单</span>
-      <button onclick="clearHistory()" style="border:none;background:none;color:var(--text-secondary);font-size:12px;cursor:pointer;">清空</button>
-    </div>
-    <div id="historyList" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
-  </div>
   <div class="camera-zone" id="cameraZone">
     <div class="camera-icon">📷</div>
     <p>拍摄或上传菜单照片<br><small>支持多页菜单，逐页拍摄</small></p>
@@ -689,10 +682,17 @@ input[type="file"] { display: none; }
 <!-- Page: Order Slip -->
 <div class="page" id="page-order">
   <div id="orderContent">
-    <div class="empty-state">
+    <div class="empty-state" id="orderEmpty">
       <div class="empty-icon">📋</div>
-      <p>在菜单中选择菜品<br>或使用推荐方案后生成订单</p>
+      <p>在菜单中选择菜品后生成订单</p>
     </div>
+  </div>
+  <div id="historySection" style="margin-top:20px;">
+    <div class="section-title" style="font-size:14px; display:flex; justify-content:space-between; align-items:center;">
+      <span>🕐 历史店铺与订单</span>
+      <button onclick="clearHistory()" style="border:none;background:none;color:var(--text-secondary);font-size:12px;cursor:pointer;">清空</button>
+    </div>
+    <div id="historyList" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
   </div>
 </div>
 
@@ -1988,17 +1988,17 @@ function submitOrder() {
   document.querySelectorAll('.remark-tag.active').forEach(t => t.classList.remove('active'));
   const customRemark = document.getElementById('customRemark');
   if (customRemark) customRemark.value = '';
-  // Reset order page
+  // Show success in order area, keep history visible below
   document.getElementById('orderContent').innerHTML = `
     <div class="empty-state">
       <div class="empty-icon">✅</div>
-      <p>订单已提交并保存到历史<br>可继续选菜开始新一轮点单</p>
+      <p>订单已提交！可继续选菜开始新一轮</p>
     </div>
   `;
   updateOrderBadge();
-  showToast('已确认下单，可继续点新菜');
-  // Go back to menu page for next round
-  setTimeout(() => switchPage('menu'), 800);
+  // Refresh history list so the new order appears immediately
+  renderHistory();
+  showToast('订单已保存');
 }
 
 function fullscreenOrder() {
@@ -2418,13 +2418,18 @@ function copyShareUrl() {
 let isGuestMode = false;
 
 function tryLoadSharedMenu() {
-  const params = new URLSearchParams(location.search);
-  const compressed = params.get('m');
+  // Try multiple ways to get the 'm' parameter (some browsers/apps may handle URLs differently)
+  let compressed = new URLSearchParams(location.search).get('m');
+  if (!compressed && location.hash.includes('m=')) {
+    // Some apps may put query params after the hash
+    const hashParams = new URLSearchParams(location.hash.split('?')[1] || '');
+    compressed = hashParams.get('m');
+  }
   if (!compressed) return false;
 
   try {
     const json = LZString.decompressFromEncodedURIComponent(compressed);
-    if (!json) return false;
+    if (!json) { console.error('LZString decompress failed'); return false; }
     const data = JSON.parse(json);
 
     // Reconstruct menuData from compressed format
@@ -2477,6 +2482,8 @@ function enterGuestMode() {
   document.getElementById('currencyBadge').textContent = s.currency + '→¥';
 
   renderMenu();
+  // Force switch to menu page (bypass same-page check)
+  currentPage = '';
   switchPage('menu', false);
 
   // In guest mode, body doesn't need bottom padding for nav
@@ -2526,7 +2533,8 @@ function loadDemoData() {
   recommendations = DEMO_RECOMMENDATIONS;
   renderMenu();
   renderRecommendations();
-  switchPage('menu');
+  currentPage = '';
+  switchPage('menu', false);
 }
 
 window.addEventListener('load', () => {
