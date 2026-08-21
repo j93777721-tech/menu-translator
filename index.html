@@ -4143,7 +4143,13 @@ async function verifyShortId(id) {
     } finally { clearTimeout(t); }
     if (!r || !r.ok) return false;
     const b = await r.json();
-    return !!(b && b.data);
+    if (!b || !b.data) return false;
+    // 回读不只看"有没有"，还要看"是不是真菜单"：结构不对就退回自包含二维码
+    let payload = b.data;
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch (e) { return false; }
+    }
+    return isValidSharedPayload(payload);
   } catch (e) {
     return false;
   }
@@ -4349,6 +4355,13 @@ let _shareLoadFailed = false;
 let _shareRetryTarget = '';
 let _shareSource = ''; // 'qr' = 短链二维码（餐厅版），'link' = 分享链接（完整版）
 
+// 分享数据结构校验：宁可报错重试，也不能让餐厅端看到"有店名、没有菜"的空菜单
+function isValidSharedPayload(data) {
+  if (!data || typeof data !== 'object') return false;
+  if (!Array.isArray(data.c) || data.c.length === 0) return false;
+  return data.c.some(cat => cat && Array.isArray(cat.i) && cat.i.length > 0);
+}
+
 async function fetchSharedMenuById(id, attempt) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => { try { ctrl.abort(); } catch(e){} }, 12000);
@@ -4363,6 +4376,7 @@ async function fetchSharedMenuById(id, attempt) {
       try { payload = JSON.parse(payload); } catch(e) { throw new Error('payload parse failed'); }
     }
     if (!payload || typeof payload !== 'object') throw new Error('bad payload shape');
+    if (!isValidSharedPayload(payload)) throw new Error('payload has no dishes');
     return payload;
   } finally {
     clearTimeout(timer);
@@ -4419,6 +4433,7 @@ async function tryLoadSharedMenu() {
     const json = LZString.decompressFromEncodedURIComponent(compressed);
     if (!json) throw new Error('LZString decompress failed');
     const data = JSON.parse(json);
+    if (!isValidSharedPayload(data)) throw new Error('shared link has no dishes');
     parseSharedData(data);
     return true;
   } catch(e) {
