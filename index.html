@@ -551,11 +551,28 @@ body {
   font-size: 12px;
   color: var(--text-secondary);
   cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+  user-select: none;
 }
 .custom-rec-chip:active {
   background: var(--primary-light);
   border-color: var(--primary);
   color: var(--primary);
+}
+.custom-rec-chip.selected {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+.custom-rec-chip.selected::before {
+  content: '✓ ';
+  font-weight: 700;
+}
+.custom-rec-chips-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
 }
 .custom-rec-loading {
   text-align: center;
@@ -1835,6 +1852,7 @@ async function startRecognition() {
       recommendations = null; // 清空上一家餐厅的套餐推荐，避免串味
       _customRecResults = null; // 清空上一家餐厅的自由推荐结果
       _customRecQuery = '';
+      _customRecTags = []; // 已选快捷条件也要清，避免串到新餐厅
       renderMenu();
       saveSession();
       hideLoading();
@@ -2893,7 +2911,16 @@ function useRecommendation(key, index) {
 // === Custom Free-form Recommendation ===
 let _customRecResults = null; // Array of recommendation objects from last custom query
 let _customRecLoading = false;
-let _customRecQuery = ''; // Last query text (preserved across tab switches)
+let _customRecQuery = ''; // 用户手动输入的自由文本（标签另存，避免回填时重复）
+let _customRecTags = []; // 已选中的快捷条件，可多选
+
+const CUSTOM_REC_SUGGESTIONS = ['想吃辣的', '不要太贵', '适合拍照打卡', '有什么甜品', '清淡健康的'];
+
+function buildCustomRecChipsHtml() {
+  return CUSTOM_REC_SUGGESTIONS.map((s, i) =>
+    `<span class="custom-rec-chip${_customRecTags.includes(s) ? ' selected' : ''}" onclick="toggleCustomRecTag(${i})">${s}</span>`
+  ).join('');
+}
 
 function renderCustomRecUI(container) {
   if (!menuData) {
@@ -2907,24 +2934,19 @@ function renderCustomRecUI(container) {
     return;
   }
 
-  // Quick suggestion chips
-  const suggestions = ['想吃辣的', '不要太贵', '适合拍照打卡', '有什么甜品', '清淡健康的'];
-  const chipsHtml = suggestions.map(s =>
-    `<span class="custom-rec-chip" onclick="fillCustomRec('${s}')">${s}</span>`
-  ).join('');
-
   // Input area
   const inputHtml = `
     <div class="custom-rec-area">
       <div class="custom-rec-input-wrap">
-        <textarea id="customRecInput" placeholder="输入你的需求，如：两个人不超过500卢比、想吃烤肉..."
+        <textarea id="customRecInput" placeholder="补充其他需求，如：两个人不超过500卢比、想吃烤肉..."
           onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendCustomRec();}"
         >${_customRecQuery}</textarea>
         <button class="custom-rec-send-btn" id="customRecSendBtn" onclick="sendCustomRec()" ${_customRecLoading ? 'disabled' : ''}>
           ${_customRecLoading ? '⏳' : '🔍'}
         </button>
       </div>
-      <div class="custom-rec-history">${chipsHtml}</div>
+      <div class="custom-rec-chips-label">快捷条件 · 可多选</div>
+      <div class="custom-rec-history" id="customRecChips">${buildCustomRecChipsHtml()}</div>
       <div id="customRecResults"></div>
     </div>
   `;
@@ -2949,12 +2971,22 @@ function renderCustomRecUI(container) {
   }, 100);
 }
 
-function fillCustomRec(text) {
+// 多选：再点一次取消。只重绘标签区，输入框内容和已出的结果都不动。
+function toggleCustomRecTag(index) {
+  const text = CUSTOM_REC_SUGGESTIONS[index];
+  if (!text) return;
+  const pos = _customRecTags.indexOf(text);
+  if (pos >= 0) _customRecTags.splice(pos, 1);
+  else _customRecTags.push(text);
+  const chips = document.getElementById('customRecChips');
+  if (chips) chips.innerHTML = buildCustomRecChipsHtml();
+}
+
+// 把已选标签和手输文本拼成一条完整需求
+function composeCustomRecQuery() {
   const input = document.getElementById('customRecInput');
-  if (input) {
-    input.value = text;
-    input.focus();
-  }
+  const free = input ? input.value.trim() : '';
+  return [..._customRecTags, free].filter(Boolean).join('，');
 }
 
 let _customRecController = null;
@@ -3002,12 +3034,13 @@ function parseCustomRecStreaming(raw) {
 async function sendCustomRec() {
   const input = document.getElementById('customRecInput');
   if (!input) return;
-  const query = input.value.trim();
-  if (!query) { showToast('请输入你的需求'); return; }
+  // 标签（可多选）+ 手输文本 合并成一条需求；只点标签不打字也能发
+  const query = composeCustomRecQuery();
+  if (!query) { showToast('请选择或输入你的需求'); return; }
   if (!menuData) { showToast('请先拍摄菜单'); return; }
   if (_customRecLoading) return;
 
-  _customRecQuery = query;
+  _customRecQuery = input.value.trim(); // 只存手输部分，标签由 _customRecTags 单独保持
   _customRecLoading = true;
   _customRecResults = null;
 
