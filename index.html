@@ -1117,10 +1117,10 @@ async function checkConnection(settings) {
 // === 智能重试引擎 ===
 async function recognizeWithFallback(images, settings) {
   const strategies = [
-    { level: 0, timeout: 30000, label: '首次尝试' },
-    { level: 0, timeout: 45000, label: '延长等待' },
-    { level: 1, timeout: 40000, label: '压缩重试' },
-    { level: 2, timeout: 50000, label: '极限压缩' },
+    { level: 0, timeout: 45000, label: '首次尝试' },
+    { level: 0, timeout: 60000, label: '延长等待' },
+    { level: 1, timeout: 60000, label: '压缩重试' },
+    { level: 2, timeout: 75000, label: '极限压缩' },
   ];
 
   let lastError = null;
@@ -1156,7 +1156,11 @@ async function recognizeWithFallback(images, settings) {
       lastError = e;
       console.warn(`Strategy ${i} failed:`, e.message);
       if (i < strategies.length - 1) {
-        await new Promise(r => setTimeout(r, 800)); // 短暂间隔避免连续请求
+        // 检测限流：429 或连接被拒时加长等待
+        const isRateLimit = e.message.includes('429') || e.message.includes('throttl') || e.message.includes('Too Many');
+        const delay = isRateLimit ? 5000 : 2500;
+        if (isRateLimit) setLoadingText('请求过频，等待冷却...');
+        await new Promise(r => setTimeout(r, delay));
       }
     }
   }
@@ -1238,14 +1242,16 @@ async function recognizeMultiPage(allImages, settings) {
   const total = allImages.length;
   const results = [];
   let failedPages = [];
+  const startTime = Date.now();
 
   for (let i = 0; i < total; i++) {
     const pageNum = i + 1;
-    setLoadingText(`正在识别第 ${pageNum}/${total} 页...`);
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+    setLoadingText(`正在识别第 ${pageNum}/${total} 页...${elapsed > 5 ? '（已耗时' + elapsed + 's）' : ''}`);
     
     try {
-      // 每页独立调用 recognizeWithFallback（带 4 级重试）
-      const pageResult = await recognizeWithFallback([allImages[i]], settings);
+      // 每页独立识别（多页模式用精简策略：3级重试，避免总耗时过长）
+      const pageResult = await recognizePageWithRetry([allImages[i]], settings, pageNum, total);
       results.push(pageResult);
       setLoadingText(`第 ${pageNum}/${total} 页完成 ✓`);
     } catch (e) {
@@ -1254,9 +1260,10 @@ async function recognizeMultiPage(allImages, settings) {
       // 继续识别其他页，不中断
     }
     
-    // 短暂间隔避免连续请求
+    // 页间间隔 3 秒，避免触发 API 限流
     if (i < total - 1) {
-      await new Promise(r => setTimeout(r, 500));
+      setLoadingText(`第 ${pageNum} 页完成，等待识别下一页...`);
+      await new Promise(r => setTimeout(r, 3000));
     }
   }
 
@@ -1277,6 +1284,51 @@ async function recognizeMultiPage(allImages, settings) {
   }
 
   return merged;
+}
+
+// 多页模式下单页识别（精简为3级重试，减少总耗时）
+async function recognizePageWithRetry(imgs, settings, pageNum, totalPages) {
+  const strategies = [
+    { level: 0, timeout: 45000, label: '识别中' },
+    { level: 1, timeout: 60000, label: '压缩重试' },
+    { level: 2, timeout: 75000, label: '极限压缩' },
+  ];
+
+  let lastError = null;
+  for (let i = 0; i < strategies.length; i++) {
+    const s = strategies[i];
+    try {
+      const tag = `第${pageNum}/${totalPages}页`;
+      if (i === 0) {
+        setLoadingText(`${tag} ${s.label}...`);
+      } else {
+        setLoadingText(`${tag} ${s.label}(${i+1}/${strategies.length})...`);
+      }
+
+      const compressed = await Promise.all(imgs.map(img => compressImage(img, s.level)));
+      const result = await callVisionAPI(buildMenuPrompt(), compressed, s.timeout);
+      const parsed = parseMenuJSON(result);
+      
+      if (!parsed.categories || parsed.categories.length === 0) {
+        throw new Error('识别结果为空');
+      }
+      const totalItems = parsed.categories.reduce((n, c) => n + (c.items ? c.items.length : 0), 0);
+      if (totalItems === 0) {
+        throw new Error('未识别到菜品');
+      }
+      return parsed;
+    } catch (e) {
+      lastError = e;
+      console.warn(`Page ${pageNum} strategy ${i} failed:`, e.message);
+      if (i < strategies.length - 1) {
+        const isRateLimit = e.message.includes('429') || e.message.includes('throttl');
+        const delay = isRateLimit ? 5000 : 3000;
+        if (isRateLimit) setLoadingText(`第${pageNum}页 请求限流，冷却中...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastError;
 }
 
 // === 智能合并多页菜单 ===
@@ -1472,57 +1524,115 @@ async function callVisionAPI(prompt, imgs, timeout = 60000) {
   });
 
   const url = getApiUrl(settings);
-  const resp = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${settings.key}`
-    },
-    body: JSON.stringify({
-      model: settings.visionModel || settings.model,
-      messages: [
-        { role: 'system', content: '你是菜单识别助手。直接输出JSON，不要解释。' },
-        { role: 'user', content }
-      ],
-      max_tokens: 2048,
-      temperature: 0.1,
-      chat_template_kwargs: { enable_thinking: false }
-    })
-  }, timeout);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
 
-  if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`API 错误 ${resp.status}: ${err.substring(0, 200)}`);
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${settings.key}`
+      },
+      body: JSON.stringify({
+        model: settings.visionModel || settings.model,
+        messages: [
+          { role: 'system', content: '你是菜单识别助手。直接输出JSON，不要解释。' },
+          { role: 'user', content }
+        ],
+        max_tokens: 2048,
+        temperature: 0.1,
+        stream: true,
+        chat_template_kwargs: { enable_thinking: false }
+      }),
+      signal: controller.signal
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(`API 错误 ${resp.status}: ${err.substring(0, 200)}`);
+    }
+
+    // 解析 SSE 流，拼装完整内容
+    const text = await readSSEStream(resp);
+    return text;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`请求超时(${Math.round(timeout/1000)}s)，网络可能不稳定`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
+}
 
-  const data = await resp.json();
-  return data.choices[0].message.content;
+// SSE 流解析器：读取流式响应拼装完整文本
+async function readSSEStream(resp) {
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let result = '';
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || ''; // 保留不完整的最后一行
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const chunk = JSON.parse(data);
+          const delta = chunk.choices?.[0]?.delta?.content;
+          if (delta) result += delta;
+        } catch (e) {
+          // 跳过解析失败的行
+        }
+      }
+    }
+  }
+  return result;
 }
 
 async function callTextAPI(prompt) {
   const settings = getSettings();
   const url = getApiUrl(settings);
-  const resp = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${settings.key}`
-    },
-    body: JSON.stringify({
-      model: settings.model,
-      messages: [
-        { role: 'system', content: '直接输出JSON，不要解释或使用代码块。' },
-        { role: 'user', content: prompt }
-      ],
-      max_tokens: 2048,
-      temperature: 0.3,
-      chat_template_kwargs: { enable_thinking: false }
-    })
-  }, 60000);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
 
-  if (!resp.ok) throw new Error(`API 错误 ${resp.status}`);
-  const data = await resp.json();
-  return data.choices[0].message.content;
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${settings.key}`
+      },
+      body: JSON.stringify({
+        model: settings.model,
+        messages: [
+          { role: 'system', content: '直接输出JSON，不要解释或使用代码块。' },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 2048,
+        temperature: 0.3,
+        stream: true,
+        chat_template_kwargs: { enable_thinking: false }
+      }),
+      signal: controller.signal
+    });
+
+    if (!resp.ok) throw new Error(`API 错误 ${resp.status}`);
+    return await readSSEStream(resp);
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('请求超时(60s)');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function parseMenuJSON(text) {
@@ -2220,6 +2330,15 @@ function fetchWithTimeout(url, options, ms = 60000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   return fetch(url, { ...options, signal: controller.signal })
+    .catch(err => {
+      if (err.name === 'AbortError') {
+        throw new Error(`请求超时(${Math.round(ms/1000)}s)，网络可能不稳定`);
+      }
+      if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+        throw new Error('网络连接失败，请检查网络后重试');
+      }
+      throw err;
+    })
     .finally(() => clearTimeout(timer));
 }
 
