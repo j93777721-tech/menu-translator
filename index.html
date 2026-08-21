@@ -2241,6 +2241,23 @@ function changeQty(index, delta) {
   updateOrderBadge();
 }
 
+function orderChangeQty(index, delta) {
+  const current = selectedItems[index] || 0;
+  const newQty = Math.max(0, current + delta);
+  if (newQty === 0) delete selectedItems[index];
+  else selectedItems[index] = newQty;
+  // If nothing left, go back to menu
+  if (Object.keys(selectedItems).length === 0) {
+    updateOrderBadge();
+    switchPage('menu');
+    showToast('已清空订单');
+    return;
+  }
+  // Re-render order slip in place
+  generateOrderSlip();
+  updateOrderBadge();
+}
+
 function getCurrentCatIndex() {
   const tabs = document.querySelectorAll('.cat-tab');
   for (let i = 0; i < tabs.length; i++) {
@@ -2309,11 +2326,14 @@ function switchRec(type) {
     return;
   }
 
-  el.innerHTML = recs.map((rec, i) => `
+  el.innerHTML = recs.map((rec, i) => {
+    const priceNum = parseInt((rec.totalPrice || '').replace(/[^\d]/g, '')) || 0;
+    const rmbStr = priceNum > 0 ? ` <span style="color:#888;font-size:12px;">≈¥${toRmb(priceNum)}</span>` : '';
+    return `
     <div class="rec-card">
       <div class="rec-card-header">
         <div class="rec-card-title">${rec.name}</div>
-        <div class="rec-card-price">${rec.totalPrice || ''}</div>
+        <div class="rec-card-price">${rec.totalPrice || ''}${rmbStr}</div>
       </div>
       <div class="rec-card-items">${rec.items.join('<br>')}</div>
       <div class="rec-card-reason">💡 ${rec.reason}</div>
@@ -2321,7 +2341,7 @@ function switchRec(type) {
         📝 使用此方案下单
       </button>
     </div>
-  `).join('');
+  `}).join('');
 }
 
 function useRecommendation(key, index) {
@@ -2455,7 +2475,8 @@ function getSelectedItemsList() {
       if (selectedItems[globalIndex]) {
         items.push({
           ...item,
-          qty: selectedItems[globalIndex]
+          qty: selectedItems[globalIndex],
+          globalIndex
         });
       }
       globalIndex++;
@@ -2510,10 +2531,15 @@ function generateOrderSlip() {
         const isSet = item.isSet && Array.isArray(item.includes) && item.includes.length > 0;
         const includesStr = isSet ? `<div style="font-size:11px;color:#888;padding-left:12px;margin-top:2px;">含：${item.includes.join('、')}</div>` : '';
         return `
-        <div style="padding:4px 0;">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;">
-            <span>${item.nameCN}${isSet ? ' <span style="font-size:10px;background:#FF6F00;color:#fff;padding:0 4px;border-radius:3px;">套餐</span>' : ''} × ${item.qty}</span>
-            <span style="white-space:nowrap;">${item.price || ''}${itemTotal ? ` <span style="color:#888;font-size:11px;">≈¥${toRmb(itemTotal)}</span>` : ''}</span>
+        <div style="padding:6px 0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="flex:1;">${item.nameCN}${isSet ? ' <span style="font-size:10px;background:#FF6F00;color:#fff;padding:0 4px;border-radius:3px;">套餐</span>' : ''}</span>
+            <div style="display:flex;align-items:center;gap:8px;margin:0 8px;">
+              <button class="qty-btn" onclick="orderChangeQty(${item.globalIndex}, -1)" style="width:24px;height:24px;font-size:14px;line-height:24px;padding:0;border-radius:50%;">−</button>
+              <span style="min-width:16px;text-align:center;font-weight:500;">${item.qty}</span>
+              <button class="qty-btn" onclick="orderChangeQty(${item.globalIndex}, 1)" style="width:24px;height:24px;font-size:14px;line-height:24px;padding:0;border-radius:50%;">+</button>
+            </div>
+            <span style="white-space:nowrap;min-width:60px;text-align:right;">${item.price || ''}${itemTotal ? ` <span style="color:#888;font-size:11px;">≈¥${toRmb(itemTotal)}</span>` : ''}</span>
           </div>
           ${includesStr}
         </div>`;
@@ -2568,7 +2594,7 @@ function generateOrderSlip() {
     </div>
 
     <div class="order-actions">
-      <button class="btn btn-outline" onclick="switchPage('menu')">✏️ 改单</button>
+      <button class="btn btn-outline" onclick="switchPage('menu')">➕ 加菜</button>
       <button class="btn btn-primary" onclick="fullscreenOrder()">📱 全屏展示</button>
     </div>
     <button class="btn btn-accent btn-block" style="margin-top:12px;" onclick="submitOrder()">
