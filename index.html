@@ -1470,7 +1470,16 @@ function parseRecJSON(text) {
 function renderMenu() {
   if (!menuData) return;
 
-  document.getElementById('shopName').textContent = menuData.shopNameCN || menuData.shopName || '餐厅';
+  // Auto-generate shop name if missing
+  if (!menuData.shopNameCN && !menuData.shopName) {
+    menuData.shopNameCN = generateShopName(menuData);
+  }
+
+  const displayName = menuData.shopNameCN || menuData.shopName || '餐厅';
+  document.getElementById('shopName').textContent = displayName;
+  document.getElementById('shopName').onclick = () => editShopName();
+  document.getElementById('shopName').style.cursor = 'pointer';
+  document.getElementById('shopName').title = '点击修改店名';
   document.getElementById('shopDesc').textContent =
     `${menuData.shopName || ''} · ${menuData.cuisine || '当地美食'}`;
 
@@ -1482,6 +1491,38 @@ function renderMenu() {
     ).join('');
 
   renderMenuItems(-1);
+}
+
+// 未识别到店名时，根据菜品内容自动生成
+function generateShopName(menu) {
+  const cuisine = menu.cuisine || '';
+  const totalItems = menu.categories.reduce((n, c) => n + (c.items ? c.items.length : 0), 0);
+  // 取前两道代表菜
+  let topDishes = [];
+  for (const cat of (menu.categories || [])) {
+    for (const item of (cat.items || [])) {
+      if (item.nameCN && topDishes.length < 2) topDishes.push(item.nameCN);
+    }
+  }
+  if (cuisine && topDishes.length > 0) {
+    return `${cuisine} · ${topDishes[0]}等${totalItems}道`;
+  }
+  if (topDishes.length > 0) {
+    return `${topDishes.join('/')}等${totalItems}道菜`;
+  }
+  return `餐厅 · ${totalItems}道菜`;
+}
+
+// 点击店名弹出编辑
+function editShopName() {
+  const current = menuData.shopNameCN || menuData.shopName || '';
+  const newName = prompt('修改餐厅名称：', current);
+  if (newName !== null && newName.trim()) {
+    menuData.shopNameCN = newName.trim();
+    document.getElementById('shopName').textContent = newName.trim();
+    saveSession();
+    showToast('店名已更新');
+  }
 }
 
 function filterCategory(catIndex) {
