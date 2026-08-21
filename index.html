@@ -930,13 +930,16 @@ input[type="file"] { display: none; }
 <div class="share-modal" id="shareModal">
   <div class="share-modal-content">
     <h3 id="shareTitle">📤 店铺菜单二维码</h3>
-    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;" id="shareDesc">其他客人扫码即可查看多语言菜单</p>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;" id="shareDesc">扫码即可查看完整菜单并下单，无需拍照翻译</p>
     <div class="qr-container" id="qrContainer"></div>
+    <div id="qrNote" style="font-size:11px;color:var(--text-secondary);text-align:center;margin-top:-8px;margin-bottom:8px;"></div>
     <div class="share-url-box" id="shareUrlBox"></div>
     <div class="share-actions">
       <button class="btn btn-outline" onclick="closeShareModal()">关闭</button>
+      <button class="btn btn-outline" onclick="saveQrImage()">💾 保存图片</button>
       <button class="btn btn-primary" onclick="copyShareUrl()">复制链接</button>
     </div>
+    <p style="font-size:11px;color:#999;margin-top:12px;margin-bottom:0;">💡 保存图片可贴在餐厅桌面，下次客人扫码直接点餐</p>
   </div>
 </div>
 
@@ -3267,58 +3270,97 @@ function shareMenu() {
   const baseUrl = location.origin + location.pathname;
   shareUrl = baseUrl + '?m=' + compressed;
 
-  // For QR code: build a lighter version if full URL is too long
-  let qrUrl = shareUrl;
-  if (qrUrl.length > 2500) {
-    // Strip recommendations for QR
-    const qrData = { ...shareData };
-    delete qrData.r;
-    // Strip descriptions
-    qrData.c.forEach(cat => { cat.i.forEach(item => { delete item.d; }); });
-    const qrJson = JSON.stringify(qrData);
-    const qrCompressed = LZString.compressToEncodedURIComponent(qrJson);
-    qrUrl = baseUrl + '?m=' + qrCompressed;
-  }
-  if (qrUrl.length > 2500) {
-    // Also strip includes
-    const qrData2 = JSON.parse(JSON.stringify(shareData));
-    delete qrData2.r;
-    qrData2.c.forEach(cat => { cat.i.forEach(item => { delete item.d; delete item.inc; item.is = 0; }); });
-    const qrJson2 = JSON.stringify(qrData2);
-    const qrCompressed2 = LZString.compressToEncodedURIComponent(qrJson2);
-    qrUrl = baseUrl + '?m=' + qrCompressed2;
-  }
-
   // Show modal
   safeClass('shareModal', 'add', 'active');
   safeText('shareTitle', `📤 ${menuData.shopNameCN || menuData.shopName || '店铺'}菜单`);
   safeText('shareUrlBox', shareUrl);
 
-  // Generate QR code (uses lighter URL if needed)
+  // Generate QR code — always try FULL data first (same as link)
   const qrContainer = document.getElementById('qrContainer');
+  const qrNote = document.getElementById('qrNote');
   qrContainer.innerHTML = '';
+  if (qrNote) qrNote.textContent = '';
+
+  const qrOpts = { width: 280, height: 280, colorDark: '#1B5E20', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.L };
+  let qrSuccess = false;
+
+  // Attempt 1: full data
   try {
-    new QRCode(qrContainer, {
-      text: qrUrl,
-      width: 200,
-      height: 200,
-      colorDark: '#1B5E20',
-      colorLight: '#ffffff',
-      correctLevel: QRCode.CorrectLevel.L
-    });
-    if (qrUrl !== shareUrl) {
-      qrContainer.insertAdjacentHTML('afterend', '<div style="font-size:11px;color:var(--text-secondary);text-align:center;margin-top:4px;" id="qrNote">二维码为精简版 · 复制链接可获取完整菜单</div>');
+    new QRCode(qrContainer, { ...qrOpts, text: shareUrl });
+    qrSuccess = true;
+    if (qrNote) qrNote.textContent = `完整菜单 · ${shareUrl.length} 字符`;
+  } catch(e1) {
+    console.warn('QR full data failed, length:', shareUrl.length, e1.message);
+    qrContainer.innerHTML = '';
+    // Attempt 2: strip recommendations (menu + desc intact)
+    try {
+      const lite = { ...shareData };
+      delete lite.r;
+      const liteUrl = baseUrl + '?m=' + LZString.compressToEncodedURIComponent(JSON.stringify(lite));
+      new QRCode(qrContainer, { ...qrOpts, text: liteUrl });
+      qrSuccess = true;
+      if (qrNote) qrNote.textContent = '含完整菜单 · 推荐搭配请用链接查看';
+    } catch(e2) {
+      qrContainer.innerHTML = '';
+      // Attempt 3: strip desc + recommendations (core menu only)
+      try {
+        const core = JSON.parse(JSON.stringify(shareData));
+        delete core.r;
+        core.c.forEach(cat => { cat.i.forEach(item => { delete item.d; }); });
+        const coreUrl = baseUrl + '?m=' + LZString.compressToEncodedURIComponent(JSON.stringify(core));
+        new QRCode(qrContainer, { ...qrOpts, text: coreUrl });
+        qrSuccess = true;
+        if (qrNote) qrNote.textContent = '菜品核心信息 · 完整版请用链接';
+      } catch(e3) {
+        console.error('QR all attempts failed');
+        qrContainer.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px;">菜品数量过多，二维码无法容纳<br>请使用下方链接分享</div>';
+      }
     }
-  } catch(e) {
-    console.error('QR generation failed:', e, 'URL length:', qrUrl.length);
-    qrContainer.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px;">菜单数据过大，二维码无法生成<br>请使用下方链接分享</div>';
   }
 }
 
 function closeShareModal() {
   safeClass('shareModal', 'remove', 'active');
-  const note = document.getElementById('qrNote');
-  if (note) note.remove();
+}
+
+function saveQrImage() {
+  const qrContainer = document.getElementById('qrContainer');
+  const canvas = qrContainer && qrContainer.querySelector('canvas');
+  if (!canvas) { showToast('二维码未生成'); return; }
+
+  // Create a larger canvas with title and padding for print-friendliness
+  const shopName = menuData.shopNameCN || menuData.shopName || '餐厅菜单';
+  const pad = 40;
+  const titleH = 50;
+  const footerH = 36;
+  const w = canvas.width + pad * 2;
+  const h = canvas.height + pad * 2 + titleH + footerH;
+
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext('2d');
+  // White background
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+  // Title
+  ctx.fillStyle = '#1B5E20';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(shopName, w / 2, pad + 24);
+  // QR
+  ctx.drawImage(canvas, pad, pad + titleH);
+  // Footer
+  ctx.fillStyle = '#999';
+  ctx.font = '12px sans-serif';
+  ctx.fillText('扫码查看菜单 · Scan to view menu', w / 2, h - pad / 2);
+
+  // Download
+  const link = document.createElement('a');
+  link.download = `${shopName}-菜单二维码.png`;
+  link.href = out.toDataURL('image/png');
+  link.click();
+  showToast('二维码已保存');
 }
 
 function copyShareUrl() {
