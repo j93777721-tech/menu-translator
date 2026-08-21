@@ -10,15 +10,17 @@ function generateId(len = 6) {
   return id;
 }
 
-async function redisSet(key, value) {
+async function redisSet(key, jsonString) {
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) throw new Error('Redis env not configured');
 
+  // 注意：jsonString 已经是序列化好的 JSON 字符串，这里不能再 JSON.stringify，
+  // 否则会双重编码，读出来的 data 是字符串而不是对象（扫码会得到空菜单）。
   const res = await fetch(`${url}/set/${key}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(value)
+    body: jsonString
   });
   if (!res.ok) throw new Error(`Redis SET failed: ${res.status}`);
   return res.json();
