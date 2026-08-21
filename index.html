@@ -855,15 +855,19 @@ input[type="file"] { display: none; }
 
 <!-- Currency Picker (用户友好的币种选择) -->
 <div class="modal-overlay" id="currencyModal">
-  <div class="modal" style="padding:20px;">
-    <h2 style="margin-bottom:4px;">💱 选择当地币种</h2>
-    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;">选择你所在国家的货币，自动换算人民币</p>
-    <div class="currency-grid" id="currencyGrid"></div>
-    <div class="form-group" style="margin-top:16px;">
-      <label style="font-size:13px;">汇率微调（多少当地币 = 1 元人民币）</label>
-      <input type="number" id="currencyRate" step="0.1" style="margin-top:4px;">
+  <div class="modal" style="padding:0;display:flex;flex-direction:column;">
+    <div style="padding:20px 20px 0;flex-shrink:0;">
+      <h2 style="margin-bottom:4px;">💱 选择当地币种</h2>
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">选择你所在国家的货币，自动换算人民币</p>
     </div>
-    <div style="display:flex; gap:10px; margin-top:16px;">
+    <div style="flex:1;overflow-y:auto;padding:0 20px;-webkit-overflow-scrolling:touch;">
+      <div class="currency-grid" id="currencyGrid"></div>
+      <div class="form-group" style="margin-top:16px;">
+        <label style="font-size:13px;">汇率微调（多少当地币 = 1 元人民币）</label>
+        <input type="number" id="currencyRate" step="0.1" style="margin-top:4px;">
+      </div>
+    </div>
+    <div style="padding:16px 20px;flex-shrink:0;border-top:1px solid var(--border);display:flex;gap:10px;padding-bottom:max(16px, env(safe-area-inset-bottom));">
       <button class="btn btn-outline" style="flex:1" onclick="closeCurrencyPicker()">取消</button>
       <button class="btn btn-primary" style="flex:1" onclick="saveCurrency()">确认</button>
     </div>
