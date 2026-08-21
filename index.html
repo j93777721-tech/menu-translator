@@ -3,7 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>菜单翻译助手</title>
+<title>点菜官 · 看懂菜单，点得明白</title>
+<meta name="theme-color" content="#2E7D32">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="点菜官">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 88 88'%3E%3Crect width='88' height='88' rx='18' fill='%232E7D32'/%3E%3Crect x='12' y='12' width='64' height='64' rx='12' fill='none' stroke='white' stroke-width='3' opacity='.45'/%3E%3Cpath d='M24 52 h40 a20 20 0 0 1-40 0 z' fill='white'/%3E%3Ctext x='44' y='33' text-anchor='middle' dominant-baseline='central' fill='white' font-family='KaiTi,STKaiti,serif' font-size='32' font-weight='700'%3E%E7%82%B9%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 88 88'%3E%3Crect width='88' height='88' fill='%232E7D32'/%3E%3Crect x='12' y='12' width='64' height='64' rx='12' fill='none' stroke='white' stroke-width='3' opacity='.45'/%3E%3Cpath d='M24 52 h40 a20 20 0 0 1-40 0 z' fill='white'/%3E%3Ctext x='44' y='33' text-anchor='middle' dominant-baseline='central' fill='white' font-family='KaiTi,STKaiti,serif' font-size='32' font-weight='700'%3E%E7%82%B9%3C/text%3E%3C/svg%3E">
 <style>
 :root {
   --primary: #2E7D32;
@@ -42,10 +47,34 @@ body {
   align-items: center;
   justify-content: space-between;
 }
-.header h1 {
-  font-size: 18px;
-  font-weight: 600;
+.header .brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.header .brand-mark {
+  flex: 0 0 auto;
+  display: block;
+}
+.header .brand-txt {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  min-width: 0;
+}
+.header .wordmark {
+  font-size: 17px;
+  font-weight: 700;
   color: var(--primary-dark);
+  letter-spacing: .5px;
+}
+.header .slogan {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  letter-spacing: .2px;
+  margin-top: 2px;
+  white-space: nowrap;
 }
 .header .settings-btn {
   width: 36px; height: 36px;
@@ -839,7 +868,18 @@ input[type="file"] { display: none; }
 <body>
 
 <div class="header">
-  <h1>🍽️ 菜单翻译助手</h1>
+  <div class="brand">
+    <svg class="brand-mark" width="32" height="32" viewBox="0 0 88 88" aria-label="点菜官" role="img">
+      <rect width="88" height="88" rx="18" fill="#2E7D32"/>
+      <rect x="12" y="12" width="64" height="64" rx="12" fill="none" stroke="#fff" stroke-width="3" opacity=".45"/>
+      <path d="M24 52 h40 a20 20 0 0 1-40 0 z" fill="#fff"/>
+      <text x="44" y="33" text-anchor="middle" dominant-baseline="central" fill="#fff" font-family="KaiTi,STKaiti,serif" font-size="32" font-weight="700">点</text>
+    </svg>
+    <div class="brand-txt">
+      <span class="wordmark">点菜官</span>
+      <span class="slogan">看懂菜单，点得明白</span>
+    </div>
+  </div>
   <div style="display:flex;align-items:center;gap:8px;">
     <span id="currencyBadge" style="font-size:12px;background:var(--primary-light);color:var(--primary);padding:4px 8px;border-radius:12px;cursor:pointer;" onclick="openCurrencyPicker()">PKR→¥</span>
     <button class="settings-btn" onclick="openSettings()">⚙️</button>
