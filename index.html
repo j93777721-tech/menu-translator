@@ -259,6 +259,29 @@ body {
 .menu-item-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
 .menu-item-desc.loading-hint { color: #aaa; font-style: italic; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:1} }
+.enrich-banner {
+  display: none;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: linear-gradient(90deg, var(--primary-light), #fff, var(--primary-light));
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--primary-dark);
+  align-items: center;
+  gap: 8px;
+}
+.enrich-banner.active { display: flex; }
+.enrich-banner .spinner {
+  width: 14px; height: 14px;
+  border: 2px solid var(--primary-light);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+@keyframes spin { to{transform:rotate(360deg)} }
 .menu-item-price { font-size: 15px; font-weight: 700; color: var(--accent); white-space: nowrap; }
 .menu-item-qty {
   display: flex;
@@ -667,6 +690,10 @@ input[type="file"] { display: none; }
       </div>
       <button class="btn btn-outline" style="padding:8px 12px;font-size:12px;white-space:nowrap;" onclick="shareMenu()">📤 分享菜单</button>
     </div>
+  </div>
+  <div class="enrich-banner" id="enrichBanner">
+    <div class="spinner"></div>
+    <span id="enrichText">正在加载辣度、描述和推荐...</span>
   </div>
   <div class="category-tabs" id="categoryTabs"></div>
   <div id="menuList"></div>
@@ -1206,10 +1233,14 @@ async function startRecognition() {
     // 成功！立即渲染菜单 & 切换页面
     pendingImages = null; // 清除待重试图片
     hideRetryOption();
+    selectedItems = {}; // 新菜单清空选择
     renderMenu();
     saveSession();
     hideLoading();
     saveToHistory();
+    // 推荐页设为加载中
+    const recEl = document.getElementById('recContent');
+    if (recEl) recEl.innerHTML = '<div class="empty-state"><div class="spinner" style="width:24px;height:24px;border:3px solid var(--primary-light);border-top-color:var(--primary);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px;"></div><p>正在生成推荐搭配...</p></div>';
     switchPage('menu');
     showToast('菜单已识别！正在补充详情...');
 
@@ -1420,6 +1451,13 @@ function hideRetryOption() {
 
 // Phase2 后台异步补充（不阻塞用户浏览菜单）
 async function enrichMenuAsync(menu) {
+  const banner = document.getElementById('enrichBanner');
+  const bannerText = document.getElementById('enrichText');
+
+  // 显示加载状态
+  if (banner) banner.classList.add('active');
+  if (bannerText) bannerText.textContent = '正在补充辣度与菜品描述...';
+
   try {
     // 2a: 补充辣度+描述+热门标记
     const enrichResult = await callTextAPI(buildEnrichPrompt(menu));
@@ -1427,16 +1465,24 @@ async function enrichMenuAsync(menu) {
     applyEnrichData(menu, enrichData);
     renderMenu(); // 刷新 UI 显示新信息
     saveSession();
+    // 保持 banner 显示
+    if (banner) banner.classList.add('active');
+    if (bannerText) bannerText.textContent = '正在生成推荐搭配...';
 
     // 2b: 生成推荐搭配
     const recResult = await callTextAPI(buildRecPrompt(menu));
     recommendations = parseRecJSON(recResult);
     renderRecommendations();
     saveSession();
+
+    // 全部完成，隐藏 banner
+    if (banner) banner.classList.remove('active');
     showToast('详情和推荐已更新 ✓');
   } catch (err) {
     console.warn('Phase2 enrich failed (non-critical):', err.message);
-    // Phase2 失败不影响已有菜单，静默处理
+    // 失败时显示提示后隐藏
+    if (bannerText) bannerText.textContent = '详情加载失败，不影响使用';
+    setTimeout(() => { if (banner) banner.classList.remove('active'); }, 2500);
   }
 }
 
