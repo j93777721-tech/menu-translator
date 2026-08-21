@@ -1832,7 +1832,9 @@ spicy: 0不辣 1微辣 2中辣 3很辣。popular: 招牌或热门菜标true。de
 }
 
 function buildRecPrompt(menu) {
+  const s = getSettings();
   return `基于以下餐厅菜单，为中国游客推荐点餐方案。餐厅位于巴基斯坦拉合尔。
+当地货币：${s.currency}，汇率：1 CNY ≈ ${s.exchangeRate} ${s.currency}
 
 菜单数据：
 ${JSON.stringify(menu, null, 2)}
@@ -1842,8 +1844,10 @@ ${JSON.stringify(menu, null, 2)}
   "forOne": [
     {
       "name": "方案名称（如：经典烤肉套餐）",
-      "items": ["菜品中文名 x数量", ...],
-      "totalPrice": "总价",
+      "items": [
+        {"n": "菜品中文名", "qty": 1, "price": 350}
+      ],
+      "total": 850,
       "reason": "推荐理由（一句话，要有趣味性）"
     }
   ],
@@ -1851,13 +1855,20 @@ ${JSON.stringify(menu, null, 2)}
   "forFour": [...]
 }
 
+字段说明：
+- items[].n: 菜品中文名（与菜单数据中的 nameCN 完全一致）
+- items[].qty: 数量
+- items[].price: 该菜品单价（${s.currency}，数字）
+- total: 方案总价（${s.currency}，数字）
+
 推荐原则：
 1. 荤素搭配，考虑中国人口味
-2. 一人餐预算约 500-1000 PKR，二人 1000-2000，四人 2000-4000
+2. 一人餐预算约 500-1000 ${s.currency}，二人 1000-2000，四人 2000-4000
 3. 优先推荐招牌菜和适合中国游客的菜品
 4. 避免过辣的菜（除非标注"微辣版"）
 5. 方案名称要生动有趣
-6. 每个方案都要有主食+菜+饮品的搭配`;
+6. 每个方案都要有主食+菜+饮品的搭配
+7. price 必须从菜单数据中取真实价格，不要编造`;
 }
 
 async function callVisionAPI(prompt, imgs, timeout = 60000) {
@@ -2327,35 +2338,60 @@ function switchRec(type) {
   }
 
   el.innerHTML = recs.map((rec, i) => {
-    const priceNum = parseInt((rec.totalPrice || '').replace(/[^\d]/g, '')) || 0;
-    const rmbStr = priceNum > 0 ? ` <span style="color:#888;font-size:12px;">≈¥${toRmb(priceNum)}</span>` : '';
-    // Match each rec item to menuData for individual prices
-    const itemsHtml = rec.items.map(recItem => {
-      const match = recItem.match(/(.+?)\s*[xX×]\s*(\d+)/);
-      const name = match ? match[1].trim() : recItem.trim();
+    const s = getSettings();
+    // Handle total: new format uses 'total' (number), legacy uses 'totalPrice' (string)
+    const totalNum = rec.total || parseInt((rec.totalPrice || '').replace(/[^\d]/g, '')) || 0;
+    const totalDisplay = rec.total ? `${s.currency} ${rec.total}` : (rec.totalPrice || '');
+    const totalRmb = totalNum > 0 ? ` ≈¥${toRmb(totalNum)}` : '';
+
+    // Render items with per-item pricing
+    const itemsHtml = (rec.items || []).map(recItem => {
+      // New structured format: {n: "菜名", qty: 1, price: 350}
+      if (typeof recItem === 'object' && recItem.n) {
+        const itemTotal = (recItem.price || 0) * (recItem.qty || 1);
+        const qtyStr = (recItem.qty || 1) > 1 ? ` ×${recItem.qty}` : '';
+        const priceStr = recItem.price ? `${s.currency} ${recItem.price}${qtyStr}` : '';
+        const rmbStr = itemTotal > 0 ? ` ≈¥${toRmb(itemTotal)}` : '';
+        return `<div style="display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;">
+          <span>${recItem.n}${qtyStr}</span>
+          <span style="color:#999;font-size:11px;white-space:nowrap;margin-left:8px;">${priceStr}${rmbStr}</span>
+        </div>`;
+      }
+      // Legacy string format: "菜名 x数量"
+      const match = String(recItem).match(/(.+?)\s*[xX×]\s*(\d+)/);
+      const name = match ? match[1].trim() : String(recItem).trim();
       const qty = match ? parseInt(match[2]) : 1;
       let priceTag = '';
       if (menuData) {
+        // Try fuzzy match against menu items
         for (const cat of menuData.categories) {
           for (const item of cat.items) {
-            if (item.nameCN && (item.nameCN.includes(name) || name.includes(item.nameCN))) {
-              const total = (item.priceNum || 0) * qty;
-              if (total > 0) {
-                priceTag = ` <span style="color:#999;font-size:11px;">${item.price}${qty > 1 ? '×' + qty : ''} ≈¥${toRmb(total)}</span>`;
-              }
+            if (!item.nameCN) continue;
+            // Multi-strategy match: exact, contains, or 2+ char overlap
+            const cn = item.nameCN;
+            const matched = cn === name || cn.includes(name) || name.includes(cn) ||
+              (name.length >= 2 && cn.length >= 2 && (cn.slice(0,2) === name.slice(0,2) || cn.slice(-2) === name.slice(-2)));
+            if (matched && item.priceNum > 0) {
+              const total = item.priceNum * qty;
+              const qtyStr = qty > 1 ? `×${qty}` : '';
+              priceTag = `<span style="color:#999;font-size:11px;white-space:nowrap;margin-left:8px;">${item.price}${qtyStr} ≈¥${toRmb(total)}</span>`;
               break;
             }
           }
           if (priceTag) break;
         }
       }
-      return `<div style="padding:2px 0;">${recItem}${priceTag}</div>`;
+      return `<div style="display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;">
+        <span>${recItem}</span>
+        ${priceTag}
+      </div>`;
     }).join('');
+
     return `
     <div class="rec-card">
       <div class="rec-card-header">
         <div class="rec-card-title">${rec.name}</div>
-        <div class="rec-card-price" style="white-space:nowrap;">${rec.totalPrice || ''}${rmbStr}</div>
+        <div class="rec-card-price" style="white-space:nowrap;">${totalDisplay}<span style="color:#888;font-size:12px;">${totalRmb}</span></div>
       </div>
       <div class="rec-card-items">${itemsHtml}</div>
       <div class="rec-card-reason">💡 ${rec.reason}</div>
@@ -2374,12 +2410,21 @@ function useRecommendation(key, index) {
   let globalIndex = 0;
   menuData.categories.forEach(cat => {
     cat.items.forEach(item => {
-      rec.items.forEach(recItem => {
-        // Match by Chinese name (may include quantity)
-        const match = recItem.match(/(.+?)\s*[xX×]\s*(\d+)/);
-        const name = match ? match[1].trim() : recItem.trim();
-        const qty = match ? parseInt(match[2]) : 1;
-        if (item.nameCN.includes(name) || name.includes(item.nameCN)) {
+      (rec.items || []).forEach(recItem => {
+        let name, qty;
+        if (typeof recItem === 'object' && recItem.n) {
+          // New structured format
+          name = recItem.n;
+          qty = recItem.qty || 1;
+        } else {
+          // Legacy string format
+          const match = String(recItem).match(/(.+?)\s*[xX×]\s*(\d+)/);
+          name = match ? match[1].trim() : String(recItem).trim();
+          qty = match ? parseInt(match[2]) : 1;
+        }
+        const cn = item.nameCN || '';
+        if (cn === name || cn.includes(name) || name.includes(cn) ||
+            (name.length >= 2 && cn.length >= 2 && (cn.slice(0,2) === name.slice(0,2)))) {
           selectedItems[globalIndex] = (selectedItems[globalIndex] || 0) + qty;
         }
       });
@@ -3131,8 +3176,8 @@ function shareMenu() {
       if (recommendations[key] && recommendations[key].length > 0) {
         shareData.r[key] = recommendations[key].map(rec => ({
           n: rec.name,
-          i: rec.items,
-          t: rec.totalPrice || '',
+          i: rec.items,  // pass through (structured objects or strings)
+          t: rec.total || rec.totalPrice || '',
           re: rec.reason || ''
         }));
       }
@@ -3194,6 +3239,8 @@ function shareMenu() {
 
 function closeShareModal() {
   safeClass('shareModal', 'remove', 'active');
+  const note = document.getElementById('qrNote');
+  if (note) note.remove();
 }
 
 function copyShareUrl() {
@@ -3260,7 +3307,8 @@ function tryLoadSharedMenu() {
           recommendations[key] = data.r[key].map(rec => ({
             name: rec.n,
             items: rec.i || [],
-            totalPrice: rec.t || '',
+            total: typeof rec.t === 'number' ? rec.t : 0,
+            totalPrice: typeof rec.t === 'string' ? rec.t : (rec.t ? String(rec.t) : ''),
             reason: rec.re || ''
           }));
         } else {
