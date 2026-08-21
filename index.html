@@ -1681,11 +1681,21 @@ function generateOrderFromRec(rec) {
 }
 
 function submitOrder() {
-  // Save current menu to history
+  // Gather order details before clearing
+  const items = getSelectedItemsList();
+  const totalPrice = items.reduce((sum, item) => sum + (item.priceNum || 0) * item.qty, 0);
+  const s = getSettings();
+  const totalStr = `${s.currency} ${totalPrice} ≈¥${toRmb(totalPrice)}`;
+  const remarks = getRemarks();
+  const remarkStr = [...remarks.presetCN, remarks.custom].filter(Boolean).join('、');
+
+  // Save to order history
+  saveOrderToHistory(items, totalStr, remarkStr);
+  // Save menu to shop history
   saveToHistory();
+
   // Clear selections
   selectedItems = {};
-  // Clear remarks
   document.querySelectorAll('.remark-tag.active').forEach(t => t.classList.remove('active'));
   const customRemark = document.getElementById('customRemark');
   if (customRemark) customRemark.value = '';
@@ -1784,9 +1794,13 @@ function showToast(msg) {
   setTimeout(() => el.classList.remove('show'), 2500);
 }
 
-// === History ===
+// === History & Order Records ===
 function getHistory() {
   try { return JSON.parse(localStorage.getItem('menuHistory') || '[]'); } catch(e) { return []; }
+}
+
+function getOrderHistory() {
+  try { return JSON.parse(localStorage.getItem('orderHistory') || '{}'); } catch(e) { return {}; }
 }
 
 function saveToHistory() {
@@ -1810,6 +1824,25 @@ function saveToHistory() {
   renderHistory();
 }
 
+function saveOrderToHistory(orderItems, totalPrice, remarks) {
+  const shopKey = menuData.shopNameCN || menuData.shopName || '未知餐厅';
+  const allOrders = getOrderHistory();
+  if (!allOrders[shopKey]) allOrders[shopKey] = [];
+
+  const order = {
+    id: Date.now(),
+    date: new Date().toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    items: orderItems.map(item => ({ n: item.nameCN, en: item.name, qty: item.qty, p: item.price })),
+    total: totalPrice,
+    remarks: remarks || ''
+  };
+
+  allOrders[shopKey].unshift(order);
+  // Keep max 10 orders per shop
+  if (allOrders[shopKey].length > 10) allOrders[shopKey].length = 10;
+  localStorage.setItem('orderHistory', JSON.stringify(allOrders));
+}
+
 function loadFromHistory(id) {
   const history = getHistory();
   const entry = history.find(h => h.id === id);
@@ -1824,8 +1857,9 @@ function loadFromHistory(id) {
 }
 
 function clearHistory() {
-  if (!confirm('确认清空历史记录？')) return;
+  if (!confirm('确认清空所有历史记录和订单？')) return;
   localStorage.removeItem('menuHistory');
+  localStorage.removeItem('orderHistory');
   renderHistory();
   showToast('历史已清空');
 }
@@ -1833,19 +1867,73 @@ function clearHistory() {
 function renderHistory() {
   const list = document.getElementById('historyList');
   const history = getHistory();
+  const allOrders = getOrderHistory();
   if (history.length === 0) {
     list.innerHTML = '<div style="font-size:13px;color:var(--text-secondary);padding:8px 0;">暂无历史记录</div>';
     return;
   }
-  list.innerHTML = history.map(h => `
-    <div onclick="loadFromHistory(${h.id})" style="background:var(--card);border-radius:8px;padding:12px;box-shadow:var(--shadow);cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
-      <div>
-        <div style="font-size:14px;font-weight:500;">${h.shopName}</div>
-        <div style="font-size:12px;color:var(--text-secondary);">${h.shopNameEn} · ${h.date}</div>
+  list.innerHTML = history.map(h => {
+    const shopOrders = allOrders[h.shopName] || [];
+    const orderCount = shopOrders.length;
+    return `
+    <div style="background:var(--card);border-radius:8px;box-shadow:var(--shadow);margin-bottom:2px;overflow:hidden;">
+      <div onclick="loadFromHistory(${h.id})" style="padding:12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:14px;font-weight:500;">${h.shopName}</div>
+          <div style="font-size:12px;color:var(--text-secondary);">${h.shopNameEn} · ${h.date}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          ${orderCount > 0 ? `<span onclick="event.stopPropagation();viewShopOrders('${h.shopName.replace(/'/g, "\\'")}')" style="font-size:11px;background:var(--primary-light);color:var(--primary);padding:3px 8px;border-radius:10px;cursor:pointer;">${orderCount}单</span>` : ''}
+          <span style="color:var(--primary);font-size:18px;">→</span>
+        </div>
       </div>
-      <span style="color:var(--primary);font-size:20px;">→</span>
+    </div>`;
+  }).join('');
+}
+
+function viewShopOrders(shopName) {
+  const allOrders = getOrderHistory();
+  const orders = allOrders[shopName] || [];
+  if (orders.length === 0) { showToast('暂无订单记录'); return; }
+
+  // Show orders in a modal-like overlay
+  history.pushState({ page: 'orders' }, '', '#orders');
+  const overlay = document.createElement('div');
+  overlay.setAttribute('data-fullscreen-overlay', '1');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:999;padding:16px;overflow-y:auto;';
+
+  function closeOverlay() { overlay.remove(); history.back(); }
+
+  overlay.innerHTML = `
+    <div style="max-width:500px;margin:0 auto;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h2 style="font-size:17px;font-weight:600;">📋 ${shopName} 历史订单</h2>
+        <button onclick="this.closest('[data-fullscreen-overlay]').remove();history.back();" style="border:none;background:var(--primary-light);width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer;">✕</button>
+      </div>
+      ${orders.map((order, i) => `
+        <div style="background:#f9f9f9;border-radius:10px;padding:14px;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-size:13px;font-weight:600;color:var(--primary);">#${orders.length - i}</span>
+            <span style="font-size:12px;color:var(--text-secondary);">${order.date}</span>
+          </div>
+          <div style="font-size:13px;">
+            ${order.items.map(item => `
+              <div style="display:flex;justify-content:space-between;padding:2px 0;">
+                <span>${item.n} ×${item.qty}</span>
+                <span style="color:var(--text-secondary);">${item.p || ''}</span>
+              </div>
+            `).join('')}
+          </div>
+          <div style="border-top:1px dashed #ddd;margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;font-weight:600;font-size:13px;">
+            <span>合计</span>
+            <span>${order.total}</span>
+          </div>
+          ${order.remarks ? `<div style="margin-top:6px;font-size:12px;color:#666;">📝 ${order.remarks}</div>` : ''}
+        </div>
+      `).join('')}
     </div>
-  `).join('');
+  `;
+  document.body.appendChild(overlay);
 }
 
 // === Demo Data ===
