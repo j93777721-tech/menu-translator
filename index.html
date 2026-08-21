@@ -927,7 +927,11 @@ input[type="file"] { display: none; }
       <button onclick="closeShareModal()" style="border:none;background:#f0f0f0;width:28px;height:28px;border-radius:50%;font-size:14px;cursor:pointer;line-height:28px;">✕</button>
     </div>
     <div class="qr-container" id="qrContainer"></div>
-    <p id="qrNote" style="font-size:12px;color:var(--text-secondary);text-align:center;margin:4px 0 12px;">扫码查看菜单 · 直接点餐</p>
+    <p id="qrNote" style="font-size:12px;color:var(--text-secondary);text-align:center;margin:4px 0 8px;">扫码查看菜单 · 直接点餐</p>
+    <div id="qrModeToggle" style="display:none;text-align:center;margin-bottom:10px;">
+      <span style="font-size:11px;color:#999;">二维码内容：</span>
+      <button id="qrModeBtn" onclick="toggleQrMode()" style="font-size:11px;border:1px solid var(--primary);color:var(--primary);background:#fff;padding:2px 10px;border-radius:12px;cursor:pointer;">切换完整版(含推荐)</button>
+    </div>
     <div class="share-actions" style="gap:8px;">
       <button class="btn btn-outline" onclick="saveQrImage()" style="font-size:13px;">保存图片</button>
       <button class="btn btn-primary" onclick="copyShareUrl()" style="font-size:13px;">复制链接</button>
@@ -3354,11 +3358,58 @@ async function shareMenu() {
       qrContainer.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px;">菜品过多，请用链接分享</div>';
     }
   }
+  // Show mode toggle if recommendations exist
+  const toggleEl = document.getElementById('qrModeToggle');
+  if (toggleEl) {
+    toggleEl.style.display = recommendations ? 'block' : 'none';
+    const btn = document.getElementById('qrModeBtn');
+    if (btn) btn.textContent = '切换完整版(含推荐)';
+  }
+  _shareQrMode = 'restaurant';
+  _shareFullData = fullData;
   _shareInProgress = false;
 }
 
 function closeShareModal() {
   safeClass('shareModal', 'remove', 'active');
+}
+
+let _shareQrMode = 'restaurant';
+let _shareFullData = null;
+
+async function toggleQrMode() {
+  const btn = document.getElementById('qrModeBtn');
+  const qrContainer = document.getElementById('qrContainer');
+  const qrNote = document.getElementById('qrNote');
+  if (!_shareFullData || !qrContainer) return;
+
+  const newMode = _shareQrMode === 'restaurant' ? 'full' : 'restaurant';
+  qrContainer.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary);font-size:13px;">切换中...</div>';
+
+  // Decide what data to store
+  const dataToStore = newMode === 'full' ? _shareFullData : (() => { const d = { ..._shareFullData }; delete d.r; return d; })();
+
+  try {
+    const res = await fetch('/api/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: dataToStore })
+    });
+    if (res.ok) {
+      const { id } = await res.json();
+      const shortUrl = `${location.origin}/s/${id}`;
+      qrContainer.innerHTML = '';
+      const qrOpts = { width: 240, height: 240, colorDark: '#1B5E20', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M };
+      new QRCode(qrContainer, { ...qrOpts, text: shortUrl });
+      _shareQrMode = newMode;
+      if (btn) btn.textContent = newMode === 'full' ? '切换餐厅版(无推荐)' : '切换完整版(含推荐)';
+      if (qrNote) qrNote.textContent = newMode === 'full' ? '含推荐方案 · 适合发给朋友' : '扫码查看菜单 · 直接点餐';
+    } else {
+      throw new Error('API error');
+    }
+  } catch(e) {
+    qrContainer.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px;">切换失败，请重试</div>';
+  }
 }
 
 function saveQrImage() {
