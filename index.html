@@ -3090,27 +3090,39 @@ function viewShopOrders(shopName) {
         <h2 style="font-size:17px;font-weight:600;">📋 ${shopName} 历史订单</h2>
         <button onclick="this.closest('[data-fullscreen-overlay]').remove();history.back();" style="border:none;background:var(--primary-light);width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer;">✕</button>
       </div>
-      ${orders.map((order, i) => `
-        <div style="background:#f9f9f9;border-radius:10px;padding:14px;margin-bottom:10px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-            <span style="font-size:13px;font-weight:600;color:var(--primary);">#${orders.length - i}</span>
-            <span style="font-size:12px;color:var(--text-secondary);">${order.date}</span>
+      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">只读记录，方便与服务员核对催菜</p>
+      ${orders.map((order, i) => {
+        // Calculate time elapsed since order
+        const elapsed = order.id ? Math.round((Date.now() - order.id) / 60000) : 0;
+        let elapsedStr = '';
+        if (elapsed > 0 && elapsed < 180) {
+          elapsedStr = elapsed < 60 ? `${elapsed}分钟前` : `${Math.floor(elapsed/60)}小时${elapsed%60}分钟前`;
+        }
+        const itemCount = (order.items || []).reduce((n, item) => n + (item.qty || 1), 0);
+        return `
+        <div style="background:#f9f9f9;border-radius:10px;padding:14px;margin-bottom:12px;border-left:3px solid var(--primary);">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <span style="font-size:14px;font-weight:600;color:var(--primary);">第 ${orders.length - i} 单</span>
+            <div style="text-align:right;">
+              <div style="font-size:14px;font-weight:600;">🕐 ${order.date}</div>
+              ${elapsedStr ? `<div style="font-size:11px;color:var(--accent);">${elapsedStr}</div>` : ''}
+            </div>
           </div>
-          <div style="font-size:13px;">
-            ${order.items.map(item => `
-              <div style="display:flex;justify-content:space-between;padding:2px 0;">
-                <span>${item.n} ×${item.qty}</span>
-                <span style="color:var(--text-secondary);">${item.p || ''}</span>
+          <div style="font-size:13px;background:#fff;border-radius:8px;padding:10px;">
+            ${(order.items || []).map(item => `
+              <div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dotted #eee;">
+                <span>${item.n}${item.en ? ` <span style="color:#999;font-size:11px;">${item.en}</span>` : ''}</span>
+                <span style="white-space:nowrap;margin-left:8px;">×${item.qty} <span style="color:var(--text-secondary);">${item.p || ''}</span></span>
               </div>
             `).join('')}
           </div>
-          <div style="border-top:1px dashed #ddd;margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;font-weight:600;font-size:13px;">
-            <span>合计</span>
+          <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid #e0e0e0;font-weight:600;font-size:14px;">
+            <span>${itemCount}件商品</span>
             <span>${order.total}</span>
           </div>
-          ${order.remarks ? `<div style="margin-top:6px;font-size:12px;color:#666;">📝 ${order.remarks}</div>` : ''}
-        </div>
-      `).join('')}
+          ${order.remarks ? `<div style="margin-top:6px;font-size:12px;color:#666;background:#fff3e0;padding:6px 10px;border-radius:6px;">📝 ${order.remarks}</div>` : ''}
+        </div>`;
+      }).join('')}
     </div>
   `;
   document.body.appendChild(overlay);
