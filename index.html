@@ -3312,18 +3312,19 @@ async function shareMenu() {
   const qrNote = document.getElementById('qrNote');
   if (qrNote) qrNote.textContent = '';
 
-  // === Save to Redis and get short ID for QR ===
+  // === Save to Redis and get short ID for QR (menu only, no AI recommendations) ===
   let shortUrl = null;
   try {
+    const qrData = { ...fullData };
+    delete qrData.r; // QR留给餐厅用，不含AI推荐
     const res = await fetch('/api/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: fullData })
+      body: JSON.stringify({ data: qrData })
     });
     if (res.ok) {
       const { id } = await res.json();
       shortUrl = `${location.origin}/s/${id}`;
-      shareUrl = shortUrl; // 复制链接也用短链
     }
   } catch (e) {
     console.warn('Save to KV failed, falling back to compressed URL:', e);
