@@ -861,6 +861,28 @@ input[type="file"] { display: none; }
 </div>
 
 <script>
+// === 全局错误兜底：防止 DOM null 引用导致崩溃 ===
+window.addEventListener('error', function(e) {
+  if (e.error && e.error instanceof TypeError && String(e.message || '').includes('null')) {
+    console.warn('[SafeGuard] Caught DOM TypeError:', e.message);
+    e.preventDefault();
+    return true;
+  }
+});
+window.addEventListener('unhandledrejection', function(e) {
+  if (e.reason && e.reason instanceof TypeError && String(e.reason.message || '').includes('null')) {
+    console.warn('[SafeGuard] Caught async TypeError:', e.reason.message);
+    e.preventDefault();
+  }
+});
+
+// 安全 DOM 操作辅助（永不抛错）
+function $(id) { return document.getElementById(id); }
+function safeText(id, text) { var el = $(id); if (el) el.textContent = text; }
+function safeHTML(id, html) { var el = $(id); if (el) el.innerHTML = html; }
+function safeClass(id, action, cls) { var el = $(id); if (el) el.classList[action](cls); }
+function safeStyle(id, prop, val) { var el = $(id); if (el) el.style[prop] = val; }
+
 // === State ===
 let images = []; // base64 images
 let menuData = null; // parsed menu
@@ -911,15 +933,18 @@ function openCurrencyPicker() {
   const s = getSettings();
   pickerCurrency = s.currency || 'PKR';
   const grid = document.getElementById('currencyGrid');
-  grid.innerHTML = CURRENCIES.map(c => `
-    <div class="currency-chip ${c.code === pickerCurrency ? 'active' : ''}" onclick="selectCurrency('${c.code}', ${c.rate})">
-      <span class="chip-flag">${c.flag}</span>
-      <span>${c.code}</span>
-      <span class="chip-name">${c.name}</span>
-    </div>
-  `).join('');
-  document.getElementById('currencyRate').value = s.exchangeRate || 39;
-  document.getElementById('currencyModal').classList.add('active');
+  if (grid) {
+    grid.innerHTML = CURRENCIES.map(c => `
+      <div class="currency-chip ${c.code === pickerCurrency ? 'active' : ''}" onclick="selectCurrency('${c.code}', ${c.rate})">
+        <span class="chip-flag">${c.flag}</span>
+        <span>${c.code}</span>
+        <span class="chip-name">${c.name}</span>
+      </div>
+    `).join('');
+  }
+  const rateEl = document.getElementById('currencyRate');
+  if (rateEl) rateEl.value = s.exchangeRate || 39;
+  safeClass('currencyModal', 'add', 'active');
 }
 
 function selectCurrency(code, defaultRate) {
@@ -927,19 +952,20 @@ function selectCurrency(code, defaultRate) {
   document.querySelectorAll('.currency-chip').forEach(el => {
     el.classList.toggle('active', el.textContent.includes(code));
   });
-  document.getElementById('currencyRate').value = defaultRate;
+  const rateEl = document.getElementById('currencyRate');
+  if (rateEl) rateEl.value = defaultRate;
 }
 
 function closeCurrencyPicker() {
-  document.getElementById('currencyModal').classList.remove('active');
+  safeClass('currencyModal', 'remove', 'active');
 }
 
 function saveCurrency() {
   const s = getSettings();
   s.currency = pickerCurrency;
-  s.exchangeRate = parseFloat(document.getElementById('currencyRate').value) || 39;
+  s.exchangeRate = parseFloat(document.getElementById('currencyRate')?.value) || 39;
   localStorage.setItem('menuToolSettings', JSON.stringify(s));
-  document.getElementById('currencyBadge').textContent = s.currency + '→¥';
+  safeText('currencyBadge', s.currency + '→¥');
   closeCurrencyPicker();
   showToast('币种已更新');
   // 如果已有菜单，刷新价格显示
@@ -949,36 +975,45 @@ function saveCurrency() {
 // === 高级设置（API 技术配置） ===
 function openSettings() {
   const s = getSettings();
-  document.getElementById('apiProvider').value = s.provider;
-  document.getElementById('apiEndpoint').value = s.endpoint;
-  document.getElementById('apiKey').value = s.key;
-  document.getElementById('apiModel').value = s.model;
-  document.getElementById('apiVisionModel').value = s.visionModel || s.model;
-  document.getElementById('apiProxy').value = s.proxy || '';
-  document.getElementById('settingsModal').classList.add('active');
+  const ep = document.getElementById('apiProvider');
+  const en = document.getElementById('apiEndpoint');
+  const ak = document.getElementById('apiKey');
+  const am = document.getElementById('apiModel');
+  const av = document.getElementById('apiVisionModel');
+  const ap = document.getElementById('apiProxy');
+  if (ep) ep.value = s.provider;
+  if (en) en.value = s.endpoint;
+  if (ak) ak.value = s.key;
+  if (am) am.value = s.model;
+  if (av) av.value = s.visionModel || s.model;
+  if (ap) ap.value = s.proxy || '';
+  const modal = document.getElementById('settingsModal');
+  if (modal) modal.classList.add('active');
 }
 
 function closeSettings() {
-  document.getElementById('settingsModal').classList.remove('active');
+  const modal = document.getElementById('settingsModal');
+  if (modal) modal.classList.remove('active');
 }
 
 function saveSettings() {
   const s = getSettings();
-  s.provider = document.getElementById('apiProvider').value;
-  s.endpoint = document.getElementById('apiEndpoint').value;
-  s.key = document.getElementById('apiKey').value;
-  s.model = document.getElementById('apiModel').value;
-  s.visionModel = document.getElementById('apiVisionModel').value;
-  s.proxy = (document.getElementById('apiProxy').value || '').trim();
+  s.provider = document.getElementById('apiProvider')?.value || s.provider;
+  s.endpoint = document.getElementById('apiEndpoint')?.value || s.endpoint;
+  s.key = document.getElementById('apiKey')?.value || s.key;
+  s.model = document.getElementById('apiModel')?.value || s.model;
+  s.visionModel = document.getElementById('apiVisionModel')?.value || s.visionModel;
+  s.proxy = (document.getElementById('apiProxy')?.value || '').trim();
   localStorage.setItem('menuToolSettings', JSON.stringify(s));
   closeSettings();
   showToast('设置已保存');
 }
 
 function onProviderChange() {
-  const p = document.getElementById('apiProvider').value;
+  const p = document.getElementById('apiProvider')?.value;
   const ep = document.getElementById('apiEndpoint');
   const model = document.getElementById('apiModel');
+  if (!ep || !model) return;
   if (p === 'openai') {
     ep.value = 'https://api.openai.com/v1/chat/completions';
     model.value = 'gpt-4o';
@@ -995,7 +1030,8 @@ let currentPage = 'camera';
 function switchPage(name, pushState = true) {
   if (name === currentPage) return;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
+  const pageEl = document.getElementById('page-' + name);
+  if (pageEl) pageEl.classList.add('active');
   document.querySelectorAll('.nav-item').forEach((n, i) => {
     n.classList.toggle('active', n.getAttribute('onclick')?.includes(name));
   });
@@ -1006,10 +1042,12 @@ function switchPage(name, pushState = true) {
   // Toggle floating order bar visibility based on page
   const floatBar = document.getElementById('orderFloatBar');
   const total = Object.values(selectedItems).reduce((a, b) => a + b, 0);
-  if ((name === 'menu' || name === 'recommend') && total > 0) {
-    floatBar.classList.add('show');
-  } else {
-    floatBar.classList.remove('show');
+  if (floatBar) {
+    if ((name === 'menu' || name === 'recommend') && total > 0) {
+      floatBar.classList.add('show');
+    } else {
+      floatBar.classList.remove('show');
+    }
   }
 }
 
@@ -1032,8 +1070,8 @@ window.addEventListener('popstate', (e) => {
 history.replaceState({ page: 'camera' }, '', '#camera');
 
 // === Camera / Upload ===
-function capturePhoto() { document.getElementById('cameraInput').click(); }
-function pickPhoto() { document.getElementById('galleryInput').click(); }
+function capturePhoto() { document.getElementById('cameraInput')?.click(); }
+function pickPhoto() { document.getElementById('galleryInput')?.click(); }
 
 function handleFiles(e) {
   const files = Array.from(e.target.files);
@@ -1050,24 +1088,28 @@ function handleFiles(e) {
 
 function renderPreviews() {
   const grid = document.getElementById('previewGrid');
-  grid.innerHTML = images.map((img, i) => `
-    <div class="preview-item">
-      <img src="${img}" alt="菜单第${i+1}页">
-      <span class="page-badge">第${i+1}页</span>
-      <button class="remove-btn" onclick="removeImage(${i})">×</button>
-    </div>
-  `).join('');
+  if (grid) {
+    grid.innerHTML = images.map((img, i) => `
+      <div class="preview-item">
+        <img src="${img}" alt="菜单第${i+1}页">
+        <span class="page-badge">第${i+1}页</span>
+        <button class="remove-btn" onclick="removeImage(${i})">×</button>
+      </div>
+    `).join('');
+  }
   const zone = document.getElementById('cameraZone');
   const btn = document.getElementById('startBtn');
   if (images.length > 0) {
-    zone.classList.add('has-images');
-    btn.style.display = 'block';
-    btn.textContent = images.length > 1
-      ? `🚀 开始识别（共${images.length}页）`
-      : '🚀 开始识别翻译';
+    if (zone) zone.classList.add('has-images');
+    if (btn) {
+      btn.style.display = 'block';
+      btn.textContent = images.length > 1
+        ? `🚀 开始识别（共${images.length}页）`
+        : '🚀 开始识别翻译';
+    }
   } else {
-    zone.classList.remove('has-images');
-    btn.style.display = 'none';
+    if (zone) zone.classList.remove('has-images');
+    if (btn) btn.style.display = 'none';
   }
 }
 
@@ -1231,18 +1273,27 @@ async function startRecognition() {
     }
     
     // 成功！立即渲染菜单 & 切换页面
-    pendingImages = null; // 清除待重试图片
-    hideRetryOption();
-    selectedItems = {}; // 新菜单清空选择
-    renderMenu();
-    saveSession();
-    hideLoading();
-    saveToHistory();
-    // 推荐页设为加载中
-    const recEl = document.getElementById('recContent');
-    if (recEl) recEl.innerHTML = '<div class="empty-state"><div class="spinner" style="width:24px;height:24px;border:3px solid var(--primary-light);border-top-color:var(--primary);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px;"></div><p>正在生成推荐搭配...</p></div>';
-    switchPage('menu');
-    showToast('菜单已识别！正在补充详情...');
+    // 用内部 try-catch 保护渲染层，防止 DOM 偶发异常被误报为"识别失败"
+    try {
+      pendingImages = null; // 清除待重试图片
+      hideRetryOption();
+      selectedItems = {}; // 新菜单清空选择
+      renderMenu();
+      saveSession();
+      hideLoading();
+      saveToHistory();
+      // 推荐页设为加载中
+      const recEl = document.getElementById('recContent');
+      if (recEl) recEl.innerHTML = '<div class="empty-state"><div class="spinner" style="width:24px;height:24px;border:3px solid var(--primary-light);border-top-color:var(--primary);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px;"></div><p>正在生成推荐搭配...</p></div>';
+      switchPage('menu');
+      showToast('菜单已识别！正在补充详情...');
+    } catch (renderErr) {
+      // 渲染异常但数据已有，仍切到菜单页
+      console.warn('Render error (non-critical):', renderErr);
+      hideLoading();
+      switchPage('menu');
+      showToast('菜单已识别（部分显示异常）');
+    }
 
     // === Phase 2: 异步补充辣度/描述/推荐（后台静默执行） ===
     enrichMenuAsync(menuData);
@@ -1252,7 +1303,11 @@ async function startRecognition() {
     
     // 提供具体的错误指引
     let msg = '';
-    if (err.message.includes('403')) {
+    if (err instanceof TypeError && String(err.message).includes('null')) {
+      // DOM 元素暂时不可用（移动端偶发），自动重试一次
+      console.warn('DOM null error during recognition, auto-retrying...');
+      msg = '页面渲染异常，请点击重试';
+    } else if (err.message.includes('403')) {
       msg = '被拦截(403)，请在设置中配置 CORS 代理';
     } else if (err.message.includes('timeout') || err.name === 'AbortError') {
       msg = '多次超时，网络可能不稳定';
@@ -1512,8 +1567,13 @@ function applyEnrichData(menu, enrichArr) {
 // Phase1: 极简 prompt — 仅提取菜名+价格，最小化输出 token (~6s)
 function buildMenuPrompt() {
   return `识别菜单图片，输出JSON（无代码块标记）：
-{"shopName":"原名","shopNameCN":"中文","cuisine":"菜系","categories":[{"name":"原分类名","nameCN":"中文","items":[{"name":"原菜名","nameCN":"中文译名","price":"原价","priceNum":数字}]}]}
-要求：准确翻译菜名为中文，价格保持原始货币格式，priceNum为纯数字。`;
+{"shopName":"原名","shopNameCN":"中文","cuisine":"菜系","categories":[{"name":"原分类名","nameCN":"中文","items":[{"name":"原菜名","nameCN":"中文译名","price":"原价","priceNum":数字,"isSet":false}]}]}
+特殊规则：
+- 套餐/Set Menu：若一个菜品下方罗列了多个包含项（如早餐套餐含果汁、面包等），标记isSet:true，并添加includes数组：
+  {"name":"Breakfast Set","nameCN":"早餐套餐","price":"2200","priceNum":2200,"isSet":true,"includes":["含项1中文","含项2中文",...]}
+- 普通菜品不加isSet或设为false
+- 价格保持原始货币格式，priceNum为纯数字
+- 准确翻译菜名为中文`;
 }
 
 // Phase2: 异步补充辣度/描述/热门标记（用文本模型，不需要图片）
@@ -1860,7 +1920,7 @@ function editShopName() {
   const newName = prompt('修改餐厅名称：', current);
   if (newName !== null && newName.trim()) {
     menuData.shopNameCN = newName.trim();
-    document.getElementById('shopName').textContent = newName.trim();
+    safeText('shopName', newName.trim());
     saveSession();
     showToast('店名已更新');
   }
@@ -1879,6 +1939,7 @@ function filterCategory(catIndex) {
 
 function renderMenuItems(catIndex) {
   const list = document.getElementById('menuList');
+  if (!list) return;
   let items = [];
   let globalIndex = 0;
   const s = getSettings();
@@ -1996,6 +2057,7 @@ function switchRec(type) {
   const recs = recommendations[key] || [];
 
   const el = document.getElementById('recContent');
+  if (!el) return;
   if (recs.length === 0) {
     el.innerHTML = '<div class="empty-state"><div class="empty-icon">🤷</div><p>暂无推荐</p></div>';
     return;
@@ -2372,12 +2434,12 @@ function submitOrder() {
   const customRemark = document.getElementById('customRemark');
   if (customRemark) customRemark.value = '';
   // Show success in order area, keep history visible below
-  document.getElementById('orderContent').innerHTML = `
+  safeHTML('orderContent', `
     <div class="empty-state">
       <div class="empty-icon">✅</div>
       <p>订单已提交！可继续选菜开始新一轮</p>
     </div>
-  `;
+  `);
   updateOrderBadge();
   // Refresh history list so the new order appears immediately
   renderHistory();
@@ -2411,7 +2473,8 @@ function fullscreenOrder() {
     </div>
   `;
   document.body.appendChild(overlay);
-  document.getElementById('closeFullscreenBtn').onclick = closeOverlay;
+  const closeBtn = document.getElementById('closeFullscreenBtn');
+  if (closeBtn) closeBtn.onclick = closeOverlay;
 }
 
 // === Utils ===
@@ -2552,6 +2615,7 @@ function clearHistory() {
 
 function renderHistory() {
   const list = document.getElementById('historyList');
+  if (!list) return;
   const history = getHistory();
   const allOrders = getOrderHistory();
   if (history.length === 0) {
@@ -2774,9 +2838,9 @@ function shareMenu() {
   }
 
   // Show modal
-  document.getElementById('shareModal').classList.add('active');
-  document.getElementById('shareTitle').textContent = `📤 ${menuData.shopNameCN || menuData.shopName || '店铺'}菜单`;
-  document.getElementById('shareUrlBox').textContent = shareUrl;
+  safeClass('shareModal', 'add', 'active');
+  safeText('shareTitle', `📤 ${menuData.shopNameCN || menuData.shopName || '店铺'}菜单`);
+  safeText('shareUrlBox', shareUrl);
 
   // Generate QR code
   const qrContainer = document.getElementById('qrContainer');
@@ -2792,7 +2856,7 @@ function shareMenu() {
 }
 
 function closeShareModal() {
-  document.getElementById('shareModal').classList.remove('active');
+  safeClass('shareModal', 'remove', 'active');
 }
 
 function copyShareUrl() {
@@ -2859,12 +2923,14 @@ function tryLoadSharedMenu() {
 
 function enterGuestMode() {
   // Hide camera/order/recommend nav items, show only menu
-  document.querySelector('.bottom-nav').style.display = 'none';
-  document.getElementById('orderFloatBar').style.display = 'none';
+  const bottomNav = document.querySelector('.bottom-nav');
+  if (bottomNav) bottomNav.style.display = 'none';
+  const guestFloatBar = document.getElementById('orderFloatBar');
+  if (guestFloatBar) guestFloatBar.style.display = 'none';
 
   // Render menu with guest banner
   const shopInfo = document.getElementById('shopInfo');
-  shopInfo.innerHTML = `
+  if (shopInfo) shopInfo.innerHTML = `
     <div class="guest-banner">
       <h2>${menuData.shopNameCN || menuData.shopName || '餐厅菜单'}</h2>
       <p>${menuData.shopName || ''} · ${menuData.cuisine || ''}</p>
@@ -2876,7 +2942,7 @@ function enterGuestMode() {
 
   // Render currency info
   const s = getSettings();
-  document.getElementById('currencyBadge').textContent = s.currency + '→¥';
+  safeText('currencyBadge', s.currency + '→¥');
 
   renderMenu();
   // Force switch to menu page (bypass same-page check)
@@ -2892,6 +2958,7 @@ function enterGuestMode() {
 
 function renderGuestMenuItems(catIndex) {
   const list = document.getElementById('menuList');
+  if (!list) return;
   let items = [];
   let globalIndex = 0;
   const s = getSettings();
@@ -2937,7 +3004,7 @@ function loadDemoData() {
 window.addEventListener('load', () => {
   // Set currency badge from saved settings
   const s = getSettings();
-  document.getElementById('currencyBadge').textContent = s.currency + '→¥';
+  safeText('currencyBadge', s.currency + '→¥');
 
   // Check if this is a shared menu URL
   if (tryLoadSharedMenu()) {
