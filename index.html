@@ -158,6 +158,34 @@ body {
   justify-content: center;
   cursor: pointer;
 }
+.preview-item .page-badge {
+  position: absolute;
+  bottom: 4px; left: 4px;
+  background: rgba(0,0,0,0.65);
+  color: #fff;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.multi-progress {
+  margin: 12px 0;
+  padding: 12px;
+  background: var(--primary-light);
+  border-radius: 8px;
+}
+.multi-progress .progress-bar {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+.multi-progress .progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width 0.3s;
+}
 
 /* Loading */
 .loading-overlay {
@@ -615,7 +643,7 @@ input[type="file"] { display: none; }
   </div>
   <div class="camera-zone" id="cameraZone">
     <div class="camera-icon">📷</div>
-    <p>拍摄或上传菜单照片<br><small>支持多页菜单，逐页拍摄</small></p>
+    <p>拍摄或上传菜单照片<br><small>菜单多页？逐页拍完后一起识别</small></p>
     <div class="camera-btns">
       <button class="btn btn-primary" onclick="capturePhoto()">📸 拍照</button>
       <button class="btn btn-outline" onclick="pickPhoto()">🖼️ 相册</button>
@@ -998,6 +1026,7 @@ function renderPreviews() {
   grid.innerHTML = images.map((img, i) => `
     <div class="preview-item">
       <img src="${img}" alt="菜单第${i+1}页">
+      <span class="page-badge">第${i+1}页</span>
       <button class="remove-btn" onclick="removeImage(${i})">×</button>
     </div>
   `).join('');
@@ -1006,6 +1035,9 @@ function renderPreviews() {
   if (images.length > 0) {
     zone.classList.add('has-images');
     btn.style.display = 'block';
+    btn.textContent = images.length > 1
+      ? `🚀 开始识别（共${images.length}页）`
+      : '🚀 开始识别翻译';
   } else {
     zone.classList.remove('has-images');
     btn.style.display = 'none';
@@ -1160,8 +1192,12 @@ async function startRecognition() {
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    // === Phase 1: 多策略智能识别 ===
-    menuData = await recognizeWithFallback(images, settings);
+    // === 单页走原有流程，多页逐页识别再合并 ===
+    if (images.length === 1) {
+      menuData = await recognizeWithFallback(images, settings);
+    } else {
+      menuData = await recognizeMultiPage(images, settings);
+    }
     
     // 成功！立即渲染菜单 & 切换页面
     pendingImages = null; // 清除待重试图片
@@ -1195,6 +1231,106 @@ async function startRecognition() {
     // 显示重试按钮（图片已保存）
     showRetryOption();
   }
+}
+
+// === 多页逐页识别 + 智能合并 ===
+async function recognizeMultiPage(allImages, settings) {
+  const total = allImages.length;
+  const results = [];
+  let failedPages = [];
+
+  for (let i = 0; i < total; i++) {
+    const pageNum = i + 1;
+    setLoadingText(`正在识别第 ${pageNum}/${total} 页...`);
+    
+    try {
+      // 每页独立调用 recognizeWithFallback（带 4 级重试）
+      const pageResult = await recognizeWithFallback([allImages[i]], settings);
+      results.push(pageResult);
+      setLoadingText(`第 ${pageNum}/${total} 页完成 ✓`);
+    } catch (e) {
+      console.warn(`Page ${pageNum} failed:`, e.message);
+      failedPages.push(pageNum);
+      // 继续识别其他页，不中断
+    }
+    
+    // 短暂间隔避免连续请求
+    if (i < total - 1) {
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+
+  // 全部失败时抛错
+  if (results.length === 0) {
+    throw new Error(`所有${total}页均识别失败`);
+  }
+
+  // 合并所有页的结果
+  setLoadingText('正在合并菜单...');
+  const merged = mergeMenuPages(results);
+
+  // 部分页失败时提示
+  if (failedPages.length > 0) {
+    setTimeout(() => {
+      showToast(`第${failedPages.join(',')}页识别失败，已合并其余${results.length}页`, 3000);
+    }, 500);
+  }
+
+  return merged;
+}
+
+// === 智能合并多页菜单 ===
+function mergeMenuPages(pages) {
+  // 以第一页为基础
+  const base = JSON.parse(JSON.stringify(pages[0]));
+  
+  // 取第一个有效店名
+  for (const page of pages) {
+    if (page.shopName && page.shopName !== '餐厅') {
+      base.shopName = page.shopName;
+      break;
+    }
+  }
+  for (const page of pages) {
+    if (page.shopNameCN && page.shopNameCN !== '餐厅') {
+      base.shopNameCN = page.shopNameCN;
+      break;
+    }
+  }
+  for (const page of pages) {
+    if (page.cuisine) { base.cuisine = page.cuisine; break; }
+  }
+
+  // 合并后续页的 categories
+  for (let i = 1; i < pages.length; i++) {
+    const page = pages[i];
+    if (!page.categories) continue;
+    
+    for (const cat of page.categories) {
+      // 查找是否有同名分类（支持中/英文匹配）
+      const existing = base.categories.find(c => 
+        (c.nameCN && cat.nameCN && c.nameCN === cat.nameCN) ||
+        (c.name && cat.name && c.name.toLowerCase() === cat.name.toLowerCase())
+      );
+      
+      if (existing) {
+        // 同名分类：合并菜品（去重）
+        const existingNames = new Set(existing.items.map(it => it.name || it.nameCN));
+        for (const item of (cat.items || [])) {
+          const key = item.name || item.nameCN;
+          if (!existingNames.has(key)) {
+            existing.items.push(item);
+            existingNames.add(key);
+          }
+        }
+      } else {
+        // 新分类：直接追加
+        base.categories.push(cat);
+      }
+    }
+  }
+
+  return base;
 }
 
 // 重试入口（使用已保存的图片）
