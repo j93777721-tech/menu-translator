@@ -967,8 +967,15 @@ function removeImage(i) {
   renderPreviews();
 }
 
-// Compress image to max 800px width, JPEG quality 0.5, with size limit
-function compressImage(dataUrl, maxWidth = 800, quality = 0.5) {
+// === Image Compression (多级压缩策略) ===
+const COMPRESS_LEVELS = [
+  { maxWidth: 800, quality: 0.6, label: '标准' },   // Level 0: 默认
+  { maxWidth: 600, quality: 0.4, label: '中等' },   // Level 1: 重试用
+  { maxWidth: 400, quality: 0.3, label: '极速' },   // Level 2: 最后兜底
+];
+
+function compressImage(dataUrl, level = 0) {
+  const { maxWidth, quality } = COMPRESS_LEVELS[Math.min(level, 2)];
   return new Promise(resolve => {
     const img = new Image();
     img.onload = () => {
@@ -979,10 +986,10 @@ function compressImage(dataUrl, maxWidth = 800, quality = 0.5) {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, w, h);
       let result = canvas.toDataURL('image/jpeg', quality);
-      // If still over 200KB, reduce quality further
+      // 强制限制 150KB 以内
       const sizeKB = (result.length * 0.75) / 1024;
-      if (sizeKB > 200) {
-        result = canvas.toDataURL('image/jpeg', 0.3);
+      if (sizeKB > 150 && quality > 0.2) {
+        result = canvas.toDataURL('image/jpeg', 0.2);
       }
       resolve(result);
     };
@@ -990,19 +997,77 @@ function compressImage(dataUrl, maxWidth = 800, quality = 0.5) {
   });
 }
 
-// === Retry Helper ===
-async function withRetry(fn, retries = 1) {
-  for (let i = 0; i <= retries; i++) {
-    try { return await fn(); } 
-    catch(e) { 
-      if (i === retries) throw e;
-      setLoadingText('识别失败，正在重试...');
-      await new Promise(r => setTimeout(r, 1000));
-    }
+// === 网络预检 ===
+async function checkConnection(settings) {
+  const url = settings.proxy || settings.endpoint;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const resp = await fetch(url, {
+      method: 'OPTIONS',
+      signal: controller.signal
+    }).finally(() => clearTimeout(timer));
+    return { ok: true, latency: 'fast' };
+  } catch (e) {
+    // OPTIONS 可能被拦，不算失败，只有完全网络不通才报错
+    if (e.name === 'AbortError') return { ok: false, reason: '网络连接超时' };
+    return { ok: true, latency: 'unknown' }; // 可能是 CORS 拦截 OPTIONS，不影响 POST
   }
 }
 
-// === AI Recognition ===
+// === 智能重试引擎 ===
+async function recognizeWithFallback(images, settings) {
+  const strategies = [
+    { level: 0, timeout: 30000, label: '首次尝试' },
+    { level: 0, timeout: 45000, label: '延长等待' },
+    { level: 1, timeout: 40000, label: '压缩重试' },
+    { level: 2, timeout: 50000, label: '极限压缩' },
+  ];
+
+  let lastError = null;
+  for (let i = 0; i < strategies.length; i++) {
+    const s = strategies[i];
+    try {
+      const progress = `(${i + 1}/${strategies.length})`;
+      if (i === 0) {
+        setLoadingText(`正在识别菜品${progress}...`);
+      } else {
+        setLoadingText(`${s.label}${progress}，请稍候...`);
+      }
+
+      // 根据策略级别压缩图片
+      const compressed = await Promise.all(images.map(img => compressImage(img, s.level)));
+      const sizeKB = compressed.reduce((sz, img) => sz + (img.length * 0.75 / 1024), 0).toFixed(0);
+      setLoadingText(`已压缩${sizeKB}KB，识别中${progress}...`);
+
+      const result = await callVisionAPI(buildMenuPrompt(), compressed, s.timeout);
+      const parsed = parseMenuJSON(result);
+      
+      // 基本校验：至少有1个分类和1个菜品
+      if (!parsed.categories || parsed.categories.length === 0) {
+        throw new Error('识别结果为空，重试中');
+      }
+      const totalItems = parsed.categories.reduce((n, c) => n + (c.items ? c.items.length : 0), 0);
+      if (totalItems === 0) {
+        throw new Error('未识别到任何菜品');
+      }
+      
+      return parsed;
+    } catch (e) {
+      lastError = e;
+      console.warn(`Strategy ${i} failed:`, e.message);
+      if (i < strategies.length - 1) {
+        await new Promise(r => setTimeout(r, 800)); // 短暂间隔避免连续请求
+      }
+    }
+  }
+  throw lastError;
+}
+
+// === 离线保存：失败后保留图片可重试 ===
+let pendingImages = null; // 保存最近一次拍照，失败可重试
+
+// === AI Recognition (主流程) ===
 async function startRecognition() {
   const settings = getSettings();
   if (!settings.key) {
@@ -1015,22 +1080,25 @@ async function startRecognition() {
     return;
   }
 
-  showLoading('正在压缩图片...');
+  // 保存图片用于失败重试
+  pendingImages = [...images];
+  showLoading('准备识别...');
 
   try {
-    // Compress images first
-    const compressed = await Promise.all(images.map(img => compressImage(img)));
-    const totalSizeKB = compressed.reduce((s, img) => s + (img.length * 0.75 / 1024), 0).toFixed(0);
-    setLoadingText(`图片已压缩(${totalSizeKB}KB)，正在识别菜单...`);
+    // 网络预检（非阻塞性，仅提示）
+    setLoadingText('检测网络连接...');
+    const connCheck = await checkConnection(settings);
+    if (!connCheck.ok) {
+      setLoadingText(`网络不佳(${connCheck.reason})，仍将尝试识别...`);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    // === Phase 1: 多策略智能识别 ===
+    menuData = await recognizeWithFallback(images, settings);
     
-    // === Phase 1: 快速识别菜名+价格（~6s） ===
-    setLoadingText('正在识别菜品（预计5-10秒）...');
-    const menuResult = await withRetry(async () => {
-      return await callVisionAPI(buildMenuPrompt(), compressed);
-    }, 2); // 2次重试提升成功率
-    menuData = parseMenuJSON(menuResult);
-    
-    // 立即渲染菜单 & 切换页面 — 用户先看到结果
+    // 成功！立即渲染菜单 & 切换页面
+    pendingImages = null; // 清除待重试图片
+    hideRetryOption();
     renderMenu();
     saveSession();
     hideLoading();
@@ -1042,13 +1110,57 @@ async function startRecognition() {
     enrichMenuAsync(menuData);
   } catch (err) {
     hideLoading();
-    const msg = err.message.includes('JSON') ? 
-      '识别结果格式异常，请重试' : 
-      err.message.includes('timeout') ?
-      '网络超时，请检查代理设置后重试' : '识别失败: ' + err.message;
-    showToast(msg);
-    console.error(err);
+    console.error('Recognition failed after all retries:', err);
+    
+    // 提供具体的错误指引
+    let msg = '';
+    if (err.message.includes('403')) {
+      msg = '被拦截(403)，请在设置中配置 CORS 代理';
+    } else if (err.message.includes('timeout') || err.name === 'AbortError') {
+      msg = '多次超时，网络可能不稳定';
+    } else if (err.message.includes('JSON') || err.message.includes('识别结果')) {
+      msg = '模型返回格式异常，请重试';
+    } else {
+      msg = err.message.substring(0, 50);
+    }
+    showToast('识别失败: ' + msg, 4000);
+    
+    // 显示重试按钮（图片已保存）
+    showRetryOption();
   }
+}
+
+// 重试入口（使用已保存的图片）
+function retryRecognition() {
+  if (pendingImages && pendingImages.length > 0) {
+    images = [...pendingImages];
+    startRecognition();
+  } else {
+    showToast('没有待重试的图片，请重新拍照');
+  }
+}
+
+function showRetryOption() {
+  // 在首页显示一个重试按钮
+  const zone = document.getElementById('uploadZone');
+  if (!zone) return;
+  let retryBtn = document.getElementById('retryBtn');
+  if (!retryBtn) {
+    retryBtn = document.createElement('button');
+    retryBtn.id = 'retryBtn';
+    retryBtn.className = 'btn-primary';
+    retryBtn.style.cssText = 'margin-top:12px;width:100%;';
+    retryBtn.textContent = '🔄 重新识别（已保存图片）';
+    retryBtn.onclick = retryRecognition;
+    zone.parentNode.insertBefore(retryBtn, zone.nextSibling);
+  }
+  retryBtn.style.display = 'block';
+}
+
+// 隐藏重试按钮（成功后）
+function hideRetryOption() {
+  const btn = document.getElementById('retryBtn');
+  if (btn) btn.style.display = 'none';
 }
 
 // Phase2 后台异步补充（不阻塞用户浏览菜单）
@@ -1146,7 +1258,7 @@ ${JSON.stringify(menu, null, 2)}
 6. 每个方案都要有主食+菜+饮品的搭配`;
 }
 
-async function callVisionAPI(prompt, imgs) {
+async function callVisionAPI(prompt, imgs, timeout = 60000) {
   const settings = getSettings();
   const content = [{ type: 'text', text: prompt }];
   imgs.forEach(img => {
@@ -1166,10 +1278,10 @@ async function callVisionAPI(prompt, imgs) {
     body: JSON.stringify({
       model: settings.visionModel || settings.model,
       messages: [{ role: 'user', content }],
-      max_tokens: 4096,
-      temperature: 0.3
+      max_tokens: 2048,
+      temperature: 0.1
     })
-  }, 60000); // 60s timeout for vision
+  }, timeout);
 
   if (!resp.ok) {
     const err = await resp.text();
@@ -1203,12 +1315,72 @@ async function callTextAPI(prompt) {
 }
 
 function parseMenuJSON(text) {
+  // 清理 markdown 标记
   text = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-  // Extract JSON object from potentially messy output
+  
+  // 尝试提取 JSON 对象
+  let json = null;
+  
+  // 方式1: 标准 JSON 对象
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1) throw new Error('JSON parse: no object found');
-  return JSON.parse(text.substring(start, end + 1));
+  if (start !== -1 && end > start) {
+    try {
+      json = JSON.parse(text.substring(start, end + 1));
+    } catch (e) {
+      // 方式2: 尝试修复截断的 JSON（补齐括号）
+      let attempt = text.substring(start, end + 1);
+      const opens = (attempt.match(/\{/g) || []).length;
+      const closes = (attempt.match(/\}/g) || []).length;
+      if (opens > closes) attempt += '}'.repeat(opens - closes);
+      const openB = (attempt.match(/\[/g) || []).length;
+      const closeB = (attempt.match(/\]/g) || []).length;
+      if (openB > closeB) attempt = attempt + ']'.repeat(openB - closeB);
+      try { json = JSON.parse(attempt); } catch(e2) {}
+    }
+  }
+  
+  // 方式3: 可能返回了数组（平铺菜品列表）
+  if (!json) {
+    const arrStart = text.indexOf('[');
+    const arrEnd = text.lastIndexOf(']');
+    if (arrStart !== -1 && arrEnd > arrStart) {
+      try {
+        const arr = JSON.parse(text.substring(arrStart, arrEnd + 1));
+        if (Array.isArray(arr) && arr.length > 0) {
+          // 转换为标准格式
+          json = {
+            shopName: '', shopNameCN: '餐厅', cuisine: '当地美食',
+            categories: [{ name: 'Menu', nameCN: '菜单', items: arr }]
+          };
+        }
+      } catch(e) {}
+    }
+  }
+  
+  if (!json) throw new Error('JSON parse: 无法解析识别结果');
+  
+  // 标准化结构容错
+  if (!json.categories && json.items) {
+    // 模型可能直接返回 items 而没有 categories 包装
+    json.categories = [{ name: 'Menu', nameCN: '菜单', items: json.items }];
+  }
+  if (!json.shopNameCN) json.shopNameCN = json.shopName || '餐厅';
+  if (!json.cuisine) json.cuisine = '当地美食';
+  
+  // 确保每个 item 有必要字段
+  (json.categories || []).forEach(cat => {
+    if (!cat.nameCN) cat.nameCN = cat.name || '其他';
+    (cat.items || []).forEach(item => {
+      if (!item.nameCN) item.nameCN = item.name || '未知菜品';
+      if (!item.priceNum && item.price) {
+        const m = String(item.price).match(/[\d,.]+/);
+        if (m) item.priceNum = parseFloat(m[0].replace(/,/g, ''));
+      }
+    });
+  });
+  
+  return json;
 }
 
 function parseRecJSON(text) {
@@ -1829,11 +2001,11 @@ function setLoadingText(text) {
 function hideLoading() {
   document.getElementById('loadingOverlay').classList.remove('active');
 }
-function showToast(msg) {
+function showToast(msg, duration = 2500) {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 2500);
+  setTimeout(() => el.classList.remove('show'), duration);
 }
 
 // === History & Order Records ===
