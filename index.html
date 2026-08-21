@@ -425,6 +425,95 @@ body {
 }
 .rec-use-btn:active { background: var(--primary); color: #fff; }
 
+/* Custom Recommendation Input */
+.custom-rec-area {
+  padding: 0;
+}
+.custom-rec-input-wrap {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  align-items: flex-end;
+}
+.custom-rec-input-wrap textarea {
+  flex: 1;
+  min-height: 44px;
+  max-height: 100px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  line-height: 1.4;
+  transition: border-color 0.2s;
+}
+.custom-rec-input-wrap textarea:focus {
+  border-color: var(--primary);
+}
+.custom-rec-input-wrap textarea::placeholder {
+  color: #aaa;
+  font-size: 13px;
+}
+.custom-rec-send-btn {
+  height: 44px;
+  min-width: 44px;
+  border: none;
+  background: var(--primary);
+  color: #fff;
+  border-radius: 10px;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.2s;
+}
+.custom-rec-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.custom-rec-send-btn:active:not(:disabled) {
+  opacity: 0.8;
+}
+.custom-rec-history {
+  margin-bottom: 12px;
+}
+.custom-rec-chip {
+  display: inline-block;
+  padding: 6px 12px;
+  margin: 0 6px 8px 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.custom-rec-chip:active {
+  background: var(--primary-light);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.custom-rec-loading {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.custom-rec-loading .spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 10px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* Order Page */
 .order-slip {
   background: var(--card);
@@ -774,6 +863,7 @@ input[type="file"] { display: none; }
     <button class="rec-tab active" onclick="switchRec(1)">🧑 一人餐</button>
     <button class="rec-tab" onclick="switchRec(2)">👫 二人餐</button>
     <button class="rec-tab" onclick="switchRec(4)">👨‍👩‍👧‍👦 四人餐</button>
+    <button class="rec-tab" onclick="switchRec('custom')">✨ 自由推荐</button>
   </div>
   <div id="recContent">
     <div class="empty-state">
@@ -2389,16 +2479,24 @@ function renderRecommendations() {
 
 function switchRec(type) {
   currentRecType = type;
+  const tabTypes = [1, 2, 4, 'custom'];
   document.querySelectorAll('.rec-tab').forEach((t, i) => {
-    t.classList.toggle('active', [1,2,4][i] === type);
+    t.classList.toggle('active', tabTypes[i] === type);
   });
-
-  const key = type === 1 ? 'forOne' : type === 2 ? 'forTwo' : 'forFour';
-  const recs = recommendations[key] || [];
 
   const el = document.getElementById('recContent');
   if (!el) return;
-  if (recs.length === 0) {
+
+  // Custom free-form recommendation tab
+  if (type === 'custom') {
+    renderCustomRecUI(el);
+    return;
+  }
+
+  const key = type === 1 ? 'forOne' : type === 2 ? 'forTwo' : 'forFour';
+  const recs = recommendations ? (recommendations[key] || []) : [];
+
+  if (!recommendations || recs.length === 0) {
     el.innerHTML = '<div class="empty-state"><div class="empty-icon">🤷</div><p>暂无推荐</p></div>';
     return;
   }
@@ -2499,6 +2597,264 @@ function useRecommendation(key, index) {
   });
 
   // If no matches found, just generate order from rec items text
+  if (Object.keys(selectedItems).length === 0) {
+    generateOrderFromRec(rec);
+  } else {
+    updateOrderBadge();
+    goToOrder();
+  }
+  showToast('已选用推荐方案');
+}
+
+// === Custom Free-form Recommendation ===
+let _customRecResults = null; // Array of recommendation objects from last custom query
+let _customRecLoading = false;
+let _customRecQuery = ''; // Last query text (preserved across tab switches)
+
+function renderCustomRecUI(container) {
+  if (!menuData) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-icon">🤖</div><p>请先拍摄菜单<br>才能使用自由推荐</p></div>';
+    return;
+  }
+
+  // Quick suggestion chips
+  const suggestions = ['想吃辣的', '不要太贵', '适合拍照打卡', '有什么甜品', '清淡健康的'];
+  const chipsHtml = suggestions.map(s =>
+    `<span class="custom-rec-chip" onclick="fillCustomRec('${s}')">${s}</span>`
+  ).join('');
+
+  // Input area
+  const inputHtml = `
+    <div class="custom-rec-area">
+      <div class="custom-rec-input-wrap">
+        <textarea id="customRecInput" placeholder="输入你的需求，如：两个人不超过500卢比、想吃烤肉..."
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendCustomRec();}"
+        >${_customRecQuery}</textarea>
+        <button class="custom-rec-send-btn" id="customRecSendBtn" onclick="sendCustomRec()" ${_customRecLoading ? 'disabled' : ''}>
+          ${_customRecLoading ? '⏳' : '🔍'}
+        </button>
+      </div>
+      <div class="custom-rec-history">${chipsHtml}</div>
+      <div id="customRecResults"></div>
+    </div>
+  `;
+
+  container.innerHTML = inputHtml;
+
+  // Restore previous results if any
+  if (_customRecLoading) {
+    document.getElementById('customRecResults').innerHTML = `
+      <div class="custom-rec-loading">
+        <div class="spinner"></div>
+        <div>正在为你挑选...</div>
+      </div>`;
+  } else if (_customRecResults && _customRecResults.length > 0) {
+    renderCustomRecResults(_customRecResults);
+  }
+
+  // Auto-focus input
+  setTimeout(() => {
+    const input = document.getElementById('customRecInput');
+    if (input) input.focus();
+  }, 100);
+}
+
+function fillCustomRec(text) {
+  const input = document.getElementById('customRecInput');
+  if (input) {
+    input.value = text;
+    input.focus();
+  }
+}
+
+async function sendCustomRec() {
+  const input = document.getElementById('customRecInput');
+  if (!input) return;
+  const query = input.value.trim();
+  if (!query) { showToast('请输入你的需求'); return; }
+  if (!menuData) { showToast('请先拍摄菜单'); return; }
+  if (_customRecLoading) return;
+
+  _customRecQuery = query;
+  _customRecLoading = true;
+  _customRecResults = null;
+
+  // Update UI to loading state
+  const sendBtn = document.getElementById('customRecSendBtn');
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '⏳'; }
+  const resultsEl = document.getElementById('customRecResults');
+  if (resultsEl) {
+    resultsEl.innerHTML = `
+      <div class="custom-rec-loading">
+        <div class="spinner"></div>
+        <div>正在为你挑选...</div>
+      </div>`;
+  }
+
+  try {
+    const prompt = buildCustomRecPrompt(query);
+    const raw = await callTextAPI(prompt);
+    const parsed = parseCustomRecJSON(raw);
+    if (!parsed || parsed.length === 0) {
+      throw new Error('未能解析推荐结果');
+    }
+    _customRecResults = parsed;
+    renderCustomRecResults(parsed);
+  } catch (err) {
+    console.error('Custom rec error:', err);
+    if (resultsEl) {
+      resultsEl.innerHTML = `<div class="empty-state"><div class="empty-icon">😅</div><p>推荐失败：${err.message}<br>请稍后再试</p></div>`;
+    }
+  } finally {
+    _customRecLoading = false;
+    const btn = document.getElementById('customRecSendBtn');
+    if (btn) { btn.disabled = false; btn.textContent = '🔍'; }
+  }
+}
+
+function buildCustomRecPrompt(userQuery) {
+  const s = getSettings();
+  const loc = getSavedLocation();
+  const locationDesc = loc ? `${loc.country || ''}${loc.city || ''}` : '海外';
+
+  // Simplify menu data for the prompt (only name + price)
+  const menuSimple = menuData.categories.map(cat => ({
+    category: cat.name,
+    items: cat.items.map(it => ({
+      name: it.nameCN || it.name,
+      price: it.priceNum || 0
+    })).filter(it => it.name)
+  }));
+
+  return `你是一个美食推荐助手。餐厅位于${locationDesc}，顾客是中国游客。
+当地货币：${s.currency}，汇率：1 CNY ≈ ${s.exchangeRate} ${s.currency}
+
+餐厅菜单：
+${JSON.stringify(menuSimple)}
+
+顾客的需求：「${userQuery}」
+
+请根据顾客需求，从菜单中推荐 2-4 个方案，输出严格 JSON（不要代码块标记）：
+[
+  {
+    "name": "方案名称（生动有趣）",
+    "items": [
+      {"n": "菜品中文名（与菜单完全一致）", "qty": 1, "price": 350}
+    ],
+    "total": 850,
+    "reason": "推荐理由（结合顾客需求解释为什么推荐这些）"
+  }
+]
+
+要求：
+1. 菜品名必须从菜单中精确匹配，price 取菜单真实价格
+2. 方案要切实满足顾客的需求描述
+3. 方案之间有差异性（如不同价位、不同风格）
+4. total 为该方案所有菜品价格之和
+5. reason 要针对顾客需求来解释`;
+}
+
+function parseCustomRecJSON(raw) {
+  // Clean markdown markers
+  let text = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+
+  // Try to extract JSON array
+  const arrStart = text.indexOf('[');
+  const arrEnd = text.lastIndexOf(']');
+  if (arrStart !== -1 && arrEnd > arrStart) {
+    try {
+      const arr = JSON.parse(text.substring(arrStart, arrEnd + 1));
+      if (Array.isArray(arr) && arr.length > 0) return arr;
+    } catch(e) {}
+  }
+
+  // Fallback: try to find JSON object with a wrapping key
+  const objStart = text.indexOf('{');
+  const objEnd = text.lastIndexOf('}');
+  if (objStart !== -1 && objEnd > objStart) {
+    try {
+      const obj = JSON.parse(text.substring(objStart, objEnd + 1));
+      // If it has a single array value, use it
+      const keys = Object.keys(obj);
+      for (const k of keys) {
+        if (Array.isArray(obj[k]) && obj[k].length > 0) return obj[k];
+      }
+      // Otherwise treat the object itself as a single recommendation
+      if (obj.name && obj.items) return [obj];
+    } catch(e) {}
+  }
+
+  return null;
+}
+
+function renderCustomRecResults(recs) {
+  const resultsEl = document.getElementById('customRecResults');
+  if (!resultsEl) return;
+
+  const s = getSettings();
+  resultsEl.innerHTML = recs.map((rec, i) => {
+    const totalNum = rec.total || 0;
+    const totalDisplay = totalNum > 0 ? `${s.currency} ${totalNum}` : '';
+    const totalRmb = totalNum > 0 ? ` ≈¥${toRmb(totalNum)}` : '';
+
+    const itemsHtml = (rec.items || []).map(recItem => {
+      if (typeof recItem === 'object' && recItem.n) {
+        const itemTotal = (recItem.price || 0) * (recItem.qty || 1);
+        const qtyStr = (recItem.qty || 1) > 1 ? ` ×${recItem.qty}` : '';
+        const priceStr = recItem.price ? `${s.currency} ${recItem.price}${qtyStr}` : '';
+        const rmbStr = itemTotal > 0 ? ` ≈¥${toRmb(itemTotal)}` : '';
+        return `<div style="display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;">
+          <span>${recItem.n}${qtyStr}</span>
+          <span style="color:#999;font-size:11px;white-space:nowrap;margin-left:8px;">${priceStr}${rmbStr}</span>
+        </div>`;
+      }
+      return `<div style="padding:3px 0;">${String(recItem)}</div>`;
+    }).join('');
+
+    return `
+    <div class="rec-card">
+      <div class="rec-card-header">
+        <div class="rec-card-title">${rec.name || '推荐方案'}</div>
+        <div class="rec-card-price" style="white-space:nowrap;">${totalDisplay}<span style="color:#888;font-size:12px;">${totalRmb}</span></div>
+      </div>
+      <div class="rec-card-items">${itemsHtml}</div>
+      <div class="rec-card-reason">💡 ${rec.reason || ''}</div>
+      <button class="rec-use-btn" onclick="useCustomRec(${i})">
+        📝 使用此方案下单
+      </button>
+    </div>`;
+  }).join('');
+}
+
+function useCustomRec(index) {
+  if (!_customRecResults || !_customRecResults[index]) return;
+  const rec = _customRecResults[index];
+
+  // Same logic as useRecommendation - match items to menu
+  selectedItems = {};
+  let globalIndex = 0;
+  menuData.categories.forEach(cat => {
+    cat.items.forEach(item => {
+      (rec.items || []).forEach(recItem => {
+        let name, qty;
+        if (typeof recItem === 'object' && recItem.n) {
+          name = recItem.n;
+          qty = recItem.qty || 1;
+        } else {
+          const match = String(recItem).match(/(.+?)\s*[xX×]\s*(\d+)/);
+          name = match ? match[1].trim() : String(recItem).trim();
+          qty = match ? parseInt(match[2]) : 1;
+        }
+        const cn = item.nameCN || '';
+        if (cn === name || cn.includes(name) || name.includes(cn) ||
+            (name.length >= 2 && cn.length >= 2 && (cn.slice(0,2) === name.slice(0,2)))) {
+          selectedItems[globalIndex] = (selectedItems[globalIndex] || 0) + qty;
+        }
+      });
+      globalIndex++;
+    });
+  });
+
   if (Object.keys(selectedItems).length === 0) {
     generateOrderFromRec(rec);
   } else {
