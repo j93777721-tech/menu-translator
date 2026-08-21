@@ -2200,7 +2200,7 @@ function renderMenuItems(catIndex) {
     const setBadge = isSet ? '<span class="set-badge">套餐</span>' : '';
     const descHtml = item.description 
       ? `<div class="menu-item-desc">${item.description}</div>`
-      : (isSet ? '' : `<div class="menu-item-desc loading-hint">详情加载中...</div>`);
+      : (isSet || isGuestMode ? '' : `<div class="menu-item-desc loading-hint">详情加载中...</div>`);
     const includesHtml = isSet ? `
       <div class="set-includes">
         <div class="set-includes-title">含：</div>
@@ -2329,13 +2329,35 @@ function switchRec(type) {
   el.innerHTML = recs.map((rec, i) => {
     const priceNum = parseInt((rec.totalPrice || '').replace(/[^\d]/g, '')) || 0;
     const rmbStr = priceNum > 0 ? ` <span style="color:#888;font-size:12px;">≈¥${toRmb(priceNum)}</span>` : '';
+    // Match each rec item to menuData for individual prices
+    const itemsHtml = rec.items.map(recItem => {
+      const match = recItem.match(/(.+?)\s*[xX×]\s*(\d+)/);
+      const name = match ? match[1].trim() : recItem.trim();
+      const qty = match ? parseInt(match[2]) : 1;
+      let priceTag = '';
+      if (menuData) {
+        for (const cat of menuData.categories) {
+          for (const item of cat.items) {
+            if (item.nameCN && (item.nameCN.includes(name) || name.includes(item.nameCN))) {
+              const total = (item.priceNum || 0) * qty;
+              if (total > 0) {
+                priceTag = ` <span style="color:#999;font-size:11px;">${item.price}${qty > 1 ? '×' + qty : ''} ≈¥${toRmb(total)}</span>`;
+              }
+              break;
+            }
+          }
+          if (priceTag) break;
+        }
+      }
+      return `<div style="padding:2px 0;">${recItem}${priceTag}</div>`;
+    }).join('');
     return `
     <div class="rec-card">
       <div class="rec-card-header">
         <div class="rec-card-title">${rec.name}</div>
-        <div class="rec-card-price">${rec.totalPrice || ''}${rmbStr}</div>
+        <div class="rec-card-price" style="white-space:nowrap;">${rec.totalPrice || ''}${rmbStr}</div>
       </div>
-      <div class="rec-card-items">${rec.items.join('<br>')}</div>
+      <div class="rec-card-items">${itemsHtml}</div>
       <div class="rec-card-reason">💡 ${rec.reason}</div>
       <button class="rec-use-btn" onclick="useRecommendation('${key}', ${i})">
         📝 使用此方案下单
@@ -3081,7 +3103,7 @@ let shareUrl = '';
 function shareMenu() {
   if (!menuData) { showToast('暂无菜单数据'); return; }
 
-  // Compress menu data for sharing - strip descriptions to save space
+  // Build full share data (self-contained, no API needed by guest)
   const shareData = {
     s: menuData.shopName || '',
     sc: menuData.shopNameCN || '',
@@ -3092,7 +3114,7 @@ function shareMenu() {
       i: cat.items.map(item => ({
         n: item.name,
         nc: item.nameCN,
-        d: (item.description || '').substring(0, 30),
+        d: item.description || '',
         p: item.price || '',
         pn: item.priceNum || 0,
         sp: item.spicy || 0,
@@ -3102,26 +3124,46 @@ function shareMenu() {
       }))
     }))
   };
+  // Include recommendations if available
+  if (recommendations) {
+    shareData.r = {};
+    ['forOne', 'forTwo', 'forFour'].forEach(key => {
+      if (recommendations[key] && recommendations[key].length > 0) {
+        shareData.r[key] = recommendations[key].map(rec => ({
+          n: rec.name,
+          i: rec.items,
+          t: rec.totalPrice || '',
+          re: rec.reason || ''
+        }));
+      }
+    });
+  }
 
   const json = JSON.stringify(shareData);
   const compressed = LZString.compressToEncodedURIComponent(json);
   const baseUrl = location.origin + location.pathname;
   shareUrl = baseUrl + '?m=' + compressed;
 
-  // Check URL length - QR codes work best under 2500 chars
-  if (shareUrl.length > 2500) {
-    // Level 1: remove descriptions
-    shareData.c.forEach(cat => { cat.i.forEach(item => { delete item.d; }); });
-    const json2 = JSON.stringify(shareData);
-    const compressed2 = LZString.compressToEncodedURIComponent(json2);
-    shareUrl = baseUrl + '?m=' + compressed2;
+  // For QR code: build a lighter version if full URL is too long
+  let qrUrl = shareUrl;
+  if (qrUrl.length > 2500) {
+    // Strip recommendations for QR
+    const qrData = { ...shareData };
+    delete qrData.r;
+    // Strip descriptions
+    qrData.c.forEach(cat => { cat.i.forEach(item => { delete item.d; }); });
+    const qrJson = JSON.stringify(qrData);
+    const qrCompressed = LZString.compressToEncodedURIComponent(qrJson);
+    qrUrl = baseUrl + '?m=' + qrCompressed;
   }
-  if (shareUrl.length > 2500) {
-    // Level 2: remove includes (set menu sub-items)
-    shareData.c.forEach(cat => { cat.i.forEach(item => { delete item.inc; item.is = 0; }); });
-    const json3 = JSON.stringify(shareData);
-    const compressed3 = LZString.compressToEncodedURIComponent(json3);
-    shareUrl = baseUrl + '?m=' + compressed3;
+  if (qrUrl.length > 2500) {
+    // Also strip includes
+    const qrData2 = JSON.parse(JSON.stringify(shareData));
+    delete qrData2.r;
+    qrData2.c.forEach(cat => { cat.i.forEach(item => { delete item.d; delete item.inc; item.is = 0; }); });
+    const qrJson2 = JSON.stringify(qrData2);
+    const qrCompressed2 = LZString.compressToEncodedURIComponent(qrJson2);
+    qrUrl = baseUrl + '?m=' + qrCompressed2;
   }
 
   // Show modal
@@ -3129,20 +3171,23 @@ function shareMenu() {
   safeText('shareTitle', `📤 ${menuData.shopNameCN || menuData.shopName || '店铺'}菜单`);
   safeText('shareUrlBox', shareUrl);
 
-  // Generate QR code
+  // Generate QR code (uses lighter URL if needed)
   const qrContainer = document.getElementById('qrContainer');
   qrContainer.innerHTML = '';
   try {
     new QRCode(qrContainer, {
-      text: shareUrl,
+      text: qrUrl,
       width: 200,
       height: 200,
       colorDark: '#1B5E20',
       colorLight: '#ffffff',
       correctLevel: QRCode.CorrectLevel.L
     });
+    if (qrUrl !== shareUrl) {
+      qrContainer.insertAdjacentHTML('afterend', '<div style="font-size:11px;color:var(--text-secondary);text-align:center;margin-top:4px;" id="qrNote">二维码为精简版 · 复制链接可获取完整菜单</div>');
+    }
   } catch(e) {
-    console.error('QR generation failed:', e, 'URL length:', shareUrl.length);
+    console.error('QR generation failed:', e, 'URL length:', qrUrl.length);
     qrContainer.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:13px;">菜单数据过大，二维码无法生成<br>请使用下方链接分享</div>';
   }
 }
@@ -3206,6 +3251,23 @@ function tryLoadSharedMenu() {
         }))
       }))
     };
+
+    // Reconstruct recommendations if present
+    if (data.r) {
+      recommendations = {};
+      ['forOne', 'forTwo', 'forFour'].forEach(key => {
+        if (data.r[key]) {
+          recommendations[key] = data.r[key].map(rec => ({
+            name: rec.n,
+            items: rec.i || [],
+            totalPrice: rec.t || '',
+            reason: rec.re || ''
+          }));
+        } else {
+          recommendations[key] = [];
+        }
+      });
+    }
 
     isGuestMode = true;
     return true;
