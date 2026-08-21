@@ -304,6 +304,44 @@ body {
 .qty-btn:active { background: var(--primary-light); }
 .qty-num { font-size: 15px; font-weight: 600; min-width: 20px; text-align: center; }
 
+/* Set Menu (套餐) */
+.set-badge {
+  display: inline-block;
+  font-size: 10px;
+  background: var(--accent);
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+  font-weight: 500;
+}
+.set-includes {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: #f5f5f5;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.set-includes-title {
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.set-includes-item {
+  padding-left: 12px;
+  position: relative;
+}
+.set-includes-item::before {
+  content: '·';
+  position: absolute;
+  left: 2px;
+  color: var(--primary);
+  font-weight: bold;
+}
+
 /* Recommend Page */
 .rec-tabs {
   display: flex;
@@ -660,9 +698,9 @@ input[type="file"] { display: none; }
 
 <!-- Page: Camera / Upload -->
 <div class="page active" id="page-camera">
-  <div class="tip-box">
-    📍 当前位置：巴基斯坦拉合尔<br>
-    已加载示例菜单供体验，拍摄真实菜单后将自动替换为识别结果
+  <div class="tip-box" id="locationTip" onclick="openLocationPicker()" style="cursor:pointer;">
+    📍 <span id="locationText">正在定位...</span>
+    <span style="float:right;font-size:11px;color:var(--primary);">切换 ▾</span>
   </div>
   <div class="camera-zone" id="cameraZone">
     <div class="camera-icon">📷</div>
@@ -843,6 +881,20 @@ input[type="file"] { display: none; }
   </div>
 </div>
 
+<!-- Location Picker Modal -->
+<div class="modal-overlay" id="locationModal">
+  <div class="modal-content" style="max-height:80vh;overflow-y:auto;">
+    <h3 style="margin-bottom:12px;">📍 选择当前位置</h3>
+    <div id="locationGrid" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+    <div style="margin-top:16px;">
+      <button class="btn btn-outline btn-block" onclick="detectLocation()">🔄 重新定位</button>
+    </div>
+    <div style="margin-top:10px;">
+      <button class="btn btn-outline btn-block" onclick="closeLocationPicker()">关闭</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
@@ -924,7 +976,13 @@ const CURRENCIES = [
   { code: 'KRW', flag: '🇰🇷', name: '韩元', rate: 190 },
   { code: 'USD', flag: '🇺🇸', name: '美元', rate: 0.14 },
   { code: 'EUR', flag: '🇪🇺', name: '欧元', rate: 0.13 },
+  { code: 'GBP', flag: '🇬🇧', name: '英镑', rate: 0.11 },
   { code: 'MYR', flag: '🇲🇾', name: '马来西亚林吉特', rate: 0.6 },
+  { code: 'SGD', flag: '🇸🇬', name: '新加坡元', rate: 0.18 },
+  { code: 'AUD', flag: '🇦🇺', name: '澳元', rate: 0.21 },
+  { code: 'TRY', flag: '🇹🇷', name: '土耳其里拉', rate: 4.8 },
+  { code: 'VND', flag: '🇻🇳', name: '越南盾', rate: 3500 },
+  { code: 'PHP', flag: '🇵🇭', name: '菲律宾比索', rate: 8 },
 ];
 
 let pickerCurrency = 'PKR';
@@ -970,6 +1028,189 @@ function saveCurrency() {
   showToast('币种已更新');
   // 如果已有菜单，刷新价格显示
   if (menuData) renderMenu();
+}
+
+// === 位置定位 & 自动币种 ===
+const LOCATIONS = [
+  { city: '拉合尔', country: '巴基斯坦', currency: 'PKR', rate: 39, flag: '🇵🇰' },
+  { city: '伊斯兰堡', country: '巴基斯坦', currency: 'PKR', rate: 39, flag: '🇵🇰' },
+  { city: '卡拉奇', country: '巴基斯坦', currency: 'PKR', rate: 39, flag: '🇵🇰' },
+  { city: '曼谷', country: '泰国', currency: 'THB', rate: 5, flag: '🇹🇭' },
+  { city: '清迈', country: '泰国', currency: 'THB', rate: 5, flag: '🇹🇭' },
+  { city: '东京', country: '日本', currency: 'JPY', rate: 22, flag: '🇯🇵' },
+  { city: '大阪', country: '日本', currency: 'JPY', rate: 22, flag: '🇯🇵' },
+  { city: '首尔', country: '韩国', currency: 'KRW', rate: 190, flag: '🇰🇷' },
+  { city: '吉隆坡', country: '马来西亚', currency: 'MYR', rate: 0.6, flag: '🇲🇾' },
+  { city: '新加坡', country: '新加坡', currency: 'SGD', rate: 0.18, flag: '🇸🇬' },
+  { city: '迪拜', country: '阿联酋', currency: 'AED', rate: 2.5, flag: '🇦🇪' },
+  { city: '德里', country: '印度', currency: 'INR', rate: 12, flag: '🇮🇳' },
+  { city: '孟买', country: '印度', currency: 'INR', rate: 12, flag: '🇮🇳' },
+  { city: '伦敦', country: '英国', currency: 'GBP', rate: 0.11, flag: '🇬🇧' },
+  { city: '巴黎', country: '法国', currency: 'EUR', rate: 0.13, flag: '🇪🇺' },
+  { city: '纽约', country: '美国', currency: 'USD', rate: 0.14, flag: '🇺🇸' },
+  { city: '洛杉矶', country: '美国', currency: 'USD', rate: 0.14, flag: '🇺🇸' },
+  { city: '悉尼', country: '澳大利亚', currency: 'AUD', rate: 0.21, flag: '🇦🇺' },
+  { city: '伊斯坦布尔', country: '土耳其', currency: 'TRY', rate: 4.8, flag: '🇹🇷' },
+  { city: '河内', country: '越南', currency: 'VND', rate: 3500, flag: '🇻🇳' },
+  { city: '金边', country: '柬埔寨', currency: 'USD', rate: 0.14, flag: '🇰🇭' },
+  { city: '马尼拉', country: '菲律宾', currency: 'PHP', rate: 8, flag: '🇵🇭' },
+];
+
+// 国家名→币种映射（用于 geolocation 反查）
+const COUNTRY_CURRENCY_MAP = {
+  'pakistan': { currency: 'PKR', rate: 39 },
+  'thailand': { currency: 'THB', rate: 5 },
+  'japan': { currency: 'JPY', rate: 22 },
+  'south korea': { currency: 'KRW', rate: 190 },
+  'korea': { currency: 'KRW', rate: 190 },
+  'malaysia': { currency: 'MYR', rate: 0.6 },
+  'singapore': { currency: 'SGD', rate: 0.18 },
+  'united arab emirates': { currency: 'AED', rate: 2.5 },
+  'india': { currency: 'INR', rate: 12 },
+  'united kingdom': { currency: 'GBP', rate: 0.11 },
+  'france': { currency: 'EUR', rate: 0.13 },
+  'germany': { currency: 'EUR', rate: 0.13 },
+  'italy': { currency: 'EUR', rate: 0.13 },
+  'spain': { currency: 'EUR', rate: 0.13 },
+  'united states': { currency: 'USD', rate: 0.14 },
+  'australia': { currency: 'AUD', rate: 0.21 },
+  'turkey': { currency: 'TRY', rate: 4.8 },
+  'vietnam': { currency: 'VND', rate: 3500 },
+  'cambodia': { currency: 'USD', rate: 0.14 },
+  'philippines': { currency: 'PHP', rate: 8 },
+  'indonesia': { currency: 'IDR', rate: 2200 },
+  'egypt': { currency: 'EGP', rate: 7 },
+  'mexico': { currency: 'MXN', rate: 2.4 },
+};
+
+function getSavedLocation() {
+  try { return JSON.parse(localStorage.getItem('menuToolLocation')); } catch(e) { return null; }
+}
+
+function saveLocation(loc) {
+  try { localStorage.setItem('menuToolLocation', JSON.stringify(loc)); } catch(e) {}
+}
+
+function updateLocationDisplay(loc) {
+  if (!loc) {
+    safeText('locationText', '未知位置（点击选择）');
+    return;
+  }
+  const text = loc.city ? `${loc.country}·${loc.city}` : loc.country;
+  safeText('locationText', text);
+}
+
+function applyLocationCurrency(loc) {
+  if (!loc || !loc.currency) return;
+  const s = getSettings();
+  if (s.currency !== loc.currency) {
+    s.currency = loc.currency;
+    s.exchangeRate = loc.rate || s.exchangeRate;
+    localStorage.setItem('menuToolSettings', JSON.stringify(s));
+    safeText('currencyBadge', s.currency + '→¥');
+    // 如有菜单则刷新价格
+    if (menuData) renderMenu();
+  }
+}
+
+function selectLocation(index) {
+  const loc = LOCATIONS[index];
+  saveLocation(loc);
+  updateLocationDisplay(loc);
+  applyLocationCurrency(loc);
+  closeLocationPicker();
+  showToast(`已切换到 ${loc.flag} ${loc.city}，币种: ${loc.currency}`);
+}
+
+function openLocationPicker() {
+  const grid = document.getElementById('locationGrid');
+  if (grid) {
+    const saved = getSavedLocation();
+    grid.innerHTML = LOCATIONS.map((loc, i) => {
+      const isActive = saved && saved.city === loc.city && saved.country === loc.country;
+      return `<div class="currency-chip ${isActive ? 'active' : ''}" onclick="selectLocation(${i})" style="min-width:auto;padding:8px 12px;">
+        <span class="chip-flag">${loc.flag}</span>
+        <span style="font-size:12px;">${loc.city}</span>
+      </div>`;
+    }).join('');
+  }
+  safeClass('locationModal', 'add', 'active');
+}
+
+function closeLocationPicker() {
+  safeClass('locationModal', 'remove', 'active');
+}
+
+function detectLocation() {
+  safeText('locationText', '正在定位...');
+  closeLocationPicker();
+  
+  if (!navigator.geolocation) {
+    safeText('locationText', '浏览器不支持定位（点击手动选择）');
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      try {
+        const { latitude, longitude } = pos.coords;
+        // 使用免费反向地理编码 API
+        const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json&accept-language=en`, {
+          headers: { 'User-Agent': 'MenuTranslator/1.0' }
+        });
+        if (!resp.ok) throw new Error('Geocoding failed');
+        const data = await resp.json();
+        const country = data.address?.country || '';
+        const city = data.address?.city || data.address?.town || data.address?.state || '';
+        
+        // 查找匹配的币种
+        const countryLower = country.toLowerCase();
+        const matched = COUNTRY_CURRENCY_MAP[countryLower];
+        
+        const loc = {
+          city: city,
+          country: country,
+          currency: matched?.currency || 'USD',
+          rate: matched?.rate || 0.14,
+          flag: ''
+        };
+        
+        // 尝试匹配 LOCATIONS 中的 flag
+        const found = LOCATIONS.find(l => l.country === country || loc.currency === l.currency);
+        if (found) loc.flag = found.flag;
+        
+        saveLocation(loc);
+        updateLocationDisplay(loc);
+        applyLocationCurrency(loc);
+        showToast(`已定位到 ${city || country}，币种: ${loc.currency}`);
+      } catch (e) {
+        console.warn('Reverse geocoding failed:', e);
+        safeText('locationText', '定位成功但地名获取失败（点击手动选择）');
+      }
+    },
+    (err) => {
+      console.warn('Geolocation error:', err.message);
+      const saved = getSavedLocation();
+      if (saved) {
+        updateLocationDisplay(saved);
+      } else {
+        safeText('locationText', '定位失败（点击手动选择）');
+      }
+    },
+    { enableHighAccuracy: false, timeout: 8000, maximumAge: 600000 }
+  );
+}
+
+// 页面加载时初始化位置
+function initLocation() {
+  const saved = getSavedLocation();
+  if (saved) {
+    updateLocationDisplay(saved);
+    applyLocationCurrency(saved);
+  } else {
+    // 首次使用，尝试自动定位
+    detectLocation();
+  }
 }
 
 // === 高级设置（API 技术配置） ===
@@ -1943,7 +2184,6 @@ function renderMenuItems(catIndex) {
   let items = [];
   let globalIndex = 0;
   const s = getSettings();
-  const currencyLabel = s.currency + '→¥';
 
   menuData.categories.forEach((cat, ci) => {
     cat.items.forEach((item, ii) => {
@@ -1958,15 +2198,23 @@ function renderMenuItems(catIndex) {
     const qty = selectedItems[item.globalIndex] || 0;
     const spicyStr = item.spicy > 0 ? ' 🌶️'.repeat(item.spicy) : '';
     const popularStr = item.popular ? ' 🔥' : '';
+    const isSet = item.isSet && Array.isArray(item.includes) && item.includes.length > 0;
+    const setBadge = isSet ? '<span class="set-badge">套餐</span>' : '';
     const descHtml = item.description 
       ? `<div class="menu-item-desc">${item.description}</div>`
-      : `<div class="menu-item-desc loading-hint">详情加载中...</div>`;
+      : (isSet ? '' : `<div class="menu-item-desc loading-hint">详情加载中...</div>`);
+    const includesHtml = isSet ? `
+      <div class="set-includes">
+        <div class="set-includes-title">含：</div>
+        ${item.includes.map(inc => `<div class="set-includes-item">${inc}</div>`).join('')}
+      </div>` : '';
     return `
       <div class="menu-item ${qty > 0 ? 'selected' : ''}" id="menuItem${item.globalIndex}">
         <div class="menu-item-info">
-          <div class="menu-item-name">${item.nameCN}${spicyStr}${popularStr}</div>
+          <div class="menu-item-name">${item.nameCN}${setBadge}${spicyStr}${popularStr}</div>
           <div class="menu-item-original">${item.name}</div>
           ${descHtml}
+          ${includesHtml}
           <div class="menu-item-qty">
             ${qty > 0 ? `
               <button class="qty-btn" onclick="changeQty(${item.globalIndex}, -1)">−</button>
@@ -2255,15 +2503,21 @@ function generateOrderSlip() {
   const slipSpecialReq = orderLang === 'local' && !isLocalLangEnglish ? '⚠️ Special Request / خاص درخواست:' : '⚠️ Special Request:';
 
   const el = document.getElementById('orderContent');
+  if (!el) return;
   el.innerHTML = `
     <div class="section-title" style="margin-bottom:8px">📖 我的中文菜单</div>
     <div style="background:#f5f5f5;border-radius:8px;padding:12px;margin-bottom:20px;font-size:13px;">
       ${items.map(item => {
         const itemTotal = (item.priceNum || 0) * item.qty;
+        const isSet = item.isSet && Array.isArray(item.includes) && item.includes.length > 0;
+        const includesStr = isSet ? `<div style="font-size:11px;color:#888;padding-left:12px;margin-top:2px;">含：${item.includes.join('、')}</div>` : '';
         return `
-        <div style="display:flex;justify-content:space-between;padding:4px 0;align-items:baseline;">
-          <span>${item.nameCN} × ${item.qty}</span>
-          <span style="white-space:nowrap;">${item.price || ''}${itemTotal ? ` <span style="color:#888;font-size:11px;">≈¥${toRmb(itemTotal)}</span>` : ''}</span>
+        <div style="padding:4px 0;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span>${item.nameCN}${isSet ? ' <span style="font-size:10px;background:#FF6F00;color:#fff;padding:0 4px;border-radius:3px;">套餐</span>' : ''} × ${item.qty}</span>
+            <span style="white-space:nowrap;">${item.price || ''}${itemTotal ? ` <span style="color:#888;font-size:11px;">≈¥${toRmb(itemTotal)}</span>` : ''}</span>
+          </div>
+          ${includesStr}
         </div>`;
       }).join('')}
       <div style="border-top:1px dashed #ccc;margin-top:8px;padding-top:8px;font-weight:600;display:flex;justify-content:space-between;">
@@ -3005,6 +3259,9 @@ window.addEventListener('load', () => {
   // Set currency badge from saved settings
   const s = getSettings();
   safeText('currencyBadge', s.currency + '→¥');
+
+  // 初始化位置（从缓存读取或尝试定位）
+  initLocation();
 
   // Check if this is a shared menu URL
   if (tryLoadSharedMenu()) {
