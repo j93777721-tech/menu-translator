@@ -528,7 +528,62 @@ body {
   font-weight: 500;
 }
 input[type="file"] { display: none; }
+
+/* Share/QR Modal */
+.share-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 400;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.share-modal.active { display: flex; }
+.share-modal-content {
+  background: #fff;
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 360px;
+  width: 100%;
+  text-align: center;
+}
+.share-modal-content h3 { font-size: 17px; margin-bottom: 16px; }
+.qr-container {
+  display: flex;
+  justify-content: center;
+  margin: 16px 0;
+}
+.qr-container canvas { border-radius: 8px; }
+.share-url-box {
+  background: #f5f5f5;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-all;
+  margin: 12px 0;
+  max-height: 60px;
+  overflow-y: auto;
+}
+.share-actions { display: flex; gap: 10px; margin-top: 16px; }
+.share-actions .btn { flex: 1; }
+
+/* Guest mode banner */
+.guest-banner {
+  background: linear-gradient(135deg, var(--primary), #43A047);
+  color: #fff;
+  padding: 16px;
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  text-align: center;
+}
+.guest-banner h2 { font-size: 18px; margin-bottom: 4px; }
+.guest-banner p { font-size: 13px; opacity: 0.9; }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
 
@@ -572,8 +627,13 @@ input[type="file"] { display: none; }
 <!-- Page: Chinese Menu -->
 <div class="page" id="page-menu">
   <div class="shop-info" id="shopInfo">
-    <div class="shop-name" id="shopName">--</div>
-    <div class="shop-desc" id="shopDesc">--</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div>
+        <div class="shop-name" id="shopName">--</div>
+        <div class="shop-desc" id="shopDesc">--</div>
+      </div>
+      <button class="btn btn-outline" style="padding:8px 12px;font-size:12px;white-space:nowrap;" onclick="shareMenu()">📤 分享菜单</button>
+    </div>
   </div>
   <div class="category-tabs" id="categoryTabs"></div>
   <div id="menuList"></div>
@@ -714,6 +774,20 @@ input[type="file"] { display: none; }
 
 <!-- Toast -->
 <div class="toast" id="toast"></div>
+
+<!-- Share QR Modal -->
+<div class="share-modal" id="shareModal">
+  <div class="share-modal-content">
+    <h3 id="shareTitle">📤 店铺菜单二维码</h3>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;" id="shareDesc">其他客人扫码即可查看多语言菜单</p>
+    <div class="qr-container" id="qrContainer"></div>
+    <div class="share-url-box" id="shareUrlBox"></div>
+    <div class="share-actions">
+      <button class="btn btn-outline" onclick="closeShareModal()">关闭</button>
+      <button class="btn btn-primary" onclick="copyShareUrl()">复制链接</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // === State ===
@@ -1128,7 +1202,11 @@ function filterCategory(catIndex) {
   document.querySelectorAll('.cat-tab').forEach((t, i) => {
     t.classList.toggle('active', i === catIndex + 1);
   });
-  renderMenuItems(catIndex);
+  if (isGuestMode) {
+    renderGuestMenuItems(catIndex);
+  } else {
+    renderMenuItems(catIndex);
+  }
 }
 
 function renderMenuItems(catIndex) {
@@ -1881,6 +1959,190 @@ const DEMO_RECOMMENDATIONS = {
   ]
 };
 
+// === Share & QR Code ===
+let shareUrl = '';
+
+function shareMenu() {
+  if (!menuData) { showToast('暂无菜单数据'); return; }
+
+  // Compress menu data for sharing - strip descriptions to save space
+  const shareData = {
+    s: menuData.shopName || '',
+    sc: menuData.shopNameCN || '',
+    cu: menuData.cuisine || '',
+    c: menuData.categories.map(cat => ({
+      n: cat.name,
+      nc: cat.nameCN,
+      i: cat.items.map(item => ({
+        n: item.name,
+        nc: item.nameCN,
+        d: (item.description || '').substring(0, 30),
+        p: item.price || '',
+        pn: item.priceNum || 0,
+        sp: item.spicy || 0,
+        po: item.popular ? 1 : 0
+      }))
+    }))
+  };
+
+  const json = JSON.stringify(shareData);
+  const compressed = LZString.compressToEncodedURIComponent(json);
+  const baseUrl = location.origin + location.pathname;
+  shareUrl = baseUrl + '?m=' + compressed;
+
+  // Check URL length - QR codes work best under 2500 chars
+  if (shareUrl.length > 2500) {
+    // Further strip: remove descriptions entirely
+    shareData.c.forEach(cat => { cat.i.forEach(item => { delete item.d; }); });
+    const json2 = JSON.stringify(shareData);
+    const compressed2 = LZString.compressToEncodedURIComponent(json2);
+    shareUrl = baseUrl + '?m=' + compressed2;
+  }
+
+  // Show modal
+  document.getElementById('shareModal').classList.add('active');
+  document.getElementById('shareTitle').textContent = `📤 ${menuData.shopNameCN || menuData.shopName || '店铺'}菜单`;
+  document.getElementById('shareUrlBox').textContent = shareUrl;
+
+  // Generate QR code
+  const qrContainer = document.getElementById('qrContainer');
+  qrContainer.innerHTML = '';
+  new QRCode(qrContainer, {
+    text: shareUrl,
+    width: 200,
+    height: 200,
+    colorDark: '#1B5E20',
+    colorLight: '#ffffff',
+    correctLevel: QRCode.CorrectLevel.M
+  });
+}
+
+function closeShareModal() {
+  document.getElementById('shareModal').classList.remove('active');
+}
+
+function copyShareUrl() {
+  if (!shareUrl) return;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(shareUrl).then(() => showToast('链接已复制'));
+  } else {
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = shareUrl;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('链接已复制');
+  }
+}
+
+// === Guest Mode (shared menu view) ===
+let isGuestMode = false;
+
+function tryLoadSharedMenu() {
+  const params = new URLSearchParams(location.search);
+  const compressed = params.get('m');
+  if (!compressed) return false;
+
+  try {
+    const json = LZString.decompressFromEncodedURIComponent(compressed);
+    if (!json) return false;
+    const data = JSON.parse(json);
+
+    // Reconstruct menuData from compressed format
+    menuData = {
+      shopName: data.s || '',
+      shopNameCN: data.sc || '',
+      cuisine: data.cu || '',
+      categories: (data.c || []).map(cat => ({
+        name: cat.n,
+        nameCN: cat.nc,
+        items: (cat.i || []).map(item => ({
+          name: item.n,
+          nameCN: item.nc,
+          description: item.d || '',
+          price: item.p || '',
+          priceNum: item.pn || 0,
+          spicy: item.sp || 0,
+          popular: !!item.po
+        }))
+      }))
+    };
+
+    isGuestMode = true;
+    return true;
+  } catch(e) {
+    console.error('Failed to load shared menu:', e);
+    return false;
+  }
+}
+
+function enterGuestMode() {
+  // Hide camera/order/recommend nav items, show only menu
+  document.querySelector('.bottom-nav').style.display = 'none';
+  document.getElementById('orderFloatBar').style.display = 'none';
+
+  // Render menu with guest banner
+  const shopInfo = document.getElementById('shopInfo');
+  shopInfo.innerHTML = `
+    <div class="guest-banner">
+      <h2>${menuData.shopNameCN || menuData.shopName || '餐厅菜单'}</h2>
+      <p>${menuData.shopName || ''} · ${menuData.cuisine || ''}</p>
+    </div>
+    <div style="text-align:center;font-size:12px;color:var(--text-secondary);margin-top:-8px;margin-bottom:8px;">
+      多语言菜单 · 扫码即用 · 无需下载
+    </div>
+  `;
+
+  // Render currency info
+  const s = getSettings();
+  document.getElementById('currencyBadge').textContent = s.currency + '→¥';
+
+  renderMenu();
+  switchPage('menu', false);
+
+  // In guest mode, body doesn't need bottom padding for nav
+  document.body.style.paddingBottom = '20px';
+
+  // Override renderMenu to show guest-friendly layout (no qty buttons)
+  renderGuestMenuItems(-1);
+}
+
+function renderGuestMenuItems(catIndex) {
+  const list = document.getElementById('menuList');
+  let items = [];
+  let globalIndex = 0;
+  const s = getSettings();
+
+  menuData.categories.forEach((cat, ci) => {
+    cat.items.forEach((item, ii) => {
+      if (catIndex === -1 || catIndex === ci) {
+        items.push({ ...item, catName: cat.nameCN, globalIndex });
+      }
+      globalIndex++;
+    });
+  });
+
+  list.innerHTML = items.map(item => {
+    const spicyStr = item.spicy > 0 ? ' 🌶️'.repeat(item.spicy) : '';
+    const popularStr = item.popular ? ' 🔥' : '';
+    return `
+      <div class="menu-item">
+        <div class="menu-item-info">
+          <div class="menu-item-name">${item.nameCN}${spicyStr}${popularStr}</div>
+          <div class="menu-item-original">${item.name}</div>
+          ${item.description ? `<div class="menu-item-desc">${item.description}</div>` : ''}
+        </div>
+        <div class="menu-item-price">
+          ${item.price || ''}
+          ${item.priceNum ? `<div style="font-size:11px;color:#888;margin-top:2px;">≈¥${toRmb(item.priceNum)}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
 // === Init ===
 function loadDemoData() {
   menuData = DEMO_MENU;
@@ -1891,7 +2153,17 @@ function loadDemoData() {
 }
 
 window.addEventListener('load', () => {
-  // Try to restore previous scan session first
+  // Set currency badge from saved settings
+  const s = getSettings();
+  document.getElementById('currencyBadge').textContent = s.currency + '→¥';
+
+  // Check if this is a shared menu URL
+  if (tryLoadSharedMenu()) {
+    enterGuestMode();
+    return;
+  }
+
+  // Normal mode: try to restore previous scan session
   if (restoreSession()) {
     switchPage('menu');
     setTimeout(() => showToast('已恢复上次识别的菜单'), 600);
@@ -1900,9 +2172,6 @@ window.addEventListener('load', () => {
     loadDemoData();
     setTimeout(() => showToast('已加载示例菜单，可直接体验功能'), 600);
   }
-  // Set currency badge from saved settings
-  const s = getSettings();
-  document.getElementById('currencyBadge').textContent = s.currency + '→¥';
   // Render history
   renderHistory();
 });
